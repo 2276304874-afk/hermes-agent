@@ -117,8 +117,31 @@ A/B 实测(新旧均 require 真实 `lib/http.js`):旧版 `💥 unhandledRejecti
 **测试网**:`parse.test.js` +5(含"真实空态不得误报降级");`routes.smoke.sh` +3「健康态不得 degraded」不变量(解析器与 CLI 格式脱节要当天暴露);`ui.smoke.js` 新增 **L5 降级层** —— 正常态永远测不到该分支,用 `page.route` 拦截 `/api/sessions` 构造 degraded 响应,断言告警出现且不白屏。
 **验证手法(值得复用)**:①最小探针 `/tmp/probe-degraded.js` —— 把 `lib/hermes` 塞进 `require.cache` 换成桩,再用假 req/res 直接调路由处理器,证明信号端到端贯穿(不启服务、零副作用);②playwright 路由拦截验前端分支。
 
+## 静默失败治理与用量落盘(P1-5 / P3-12,2026-09-11,提交 `47a1b67`)
+
+### 静默 catch 的分级约定(别再来一轮"全加 console.log")
+- **会让用户困惑的失败** → 界面可见提示 + `console.warn`。判定标准:失败后用户看到的是"空白/没反应"且无从判断(模型下拉为空、接口列表空白、令牌 401)。
+- **确定可忽略的** → 前端 `softFail(where, e)`(`console.debug`)。理由:浏览器控制台**不写** launchd 捕获的日志文件,没有刷屏风险,可放心留痕。
+- **正常分支** → 只留注释、不留痕。例:"工具输出本来就不是 JSON""缓存文件不存在(首次运行)""子进程已退出 → kill 抛 ESRCH"。逐条打日志会把真信号淹掉。
+- **高频轮询路径**(`lib/db.js` 的 `withDB`,每 150ms)→ `warnOnce`:同一条错误只打一次。**这是"补日志"与"刷爆日志"之间唯一的平衡点。**
+- **启动期一次性路径**(`lib/auth.js` 令牌读写)→ 直接 `console.warn`。这里静默最危险:读不到"已存在的"令牌文件会**静默换发新令牌**,浏览器里存的旧令牌全部失效,用户只看到 401 却不知原因。
+- 用 `if (e.code !== 'ENOENT')` 区分"还没配/还没写过"(正常空态)与真故障(`cloud.js` / `toolbox.js` 的写法)。
+
+### 用量落盘(P3-12)
+- `lib/usage.js` 追加写 `~/.hermes/usage.jsonl`(一行一条 JSON)。路径可注入:`usageFile(env)` 认 `HERMES_USAGE_FILE`,各函数都收 `file` 参数 —— **测试绝不碰真实文件**,沿用 `resolvePython(home, env)` 的同款约定。
+- `lib/state.js` 的 `recordUsage` 同时维护内存环形缓冲(60 轮,供 `/api/usage` 的 `runs` 立即读)与落盘(best-effort,永不抛给聊天路径;仅首次失败 warn)。
+- 5MB 超限 → 保留**尾部** 2000 行重写(保最新的,不是最旧的)。
+- `readUsageTail` 从文件中间起读时**必须丢掉半截首行**,否则每次聚合静默少一条,看起来像"最近一轮没记上"。
+- `/api/usage` 返回 `{runs, summary}`;`summary` 的均值只按近 24h 算(跨模型/跨版本的旧数据混进来会掩盖真实变化)。前端侧栏底部显示一行 24h 统计。
+
+### 测试反证 + playwright 陷阱
+- 新增的前端断言必须做一次**反证**:临时回退修复,确认断言变红且报的正是原故障症状(本次 L6 回退后报"暂无内容",与原 bug 表现一致)。否则只是"测试通过"的自我安慰。
+- 陷阱:`ctx.addInitScript` 会在**每次导航**时重新注入 `localStorage` → 反面用例不能靠"清 localStorage + reload"构造,要改成"写入错误值 + 触发请求"(走同一条 401 → showAuthBar 路径)。
+
 ## 知识库(KB)集成
-- 统一入口=主服务 4173:`GET /kb`(托管 `kb/viewer.html`)、`GET /api/kb/list?cat=inbox|distilled|memory|all`(**返回纯数组**)、`GET /api/kb/search?q=`(复用 recallHits)、`GET /api/kb/status`。均为公开只读(仅 127.0.0.1)。
+- 统一入口=主服务 4173:`GET /kb`(托管 `kb/viewer.html`)、`GET /api/kb/list?cat=inbox|distilled|memory|all`(**返回纯数组**)、`GET /api/kb/search?q=`(复用 recallHits,**返回 `{query,count,results}` 对象**)、`GET /api/kb/status`。
+- **P2-10 定案(2026-09-11,勿改回公开)**:四个数据接口**全部需要 Bearer token**,与 `/api/*` 同一把;只有 `GET /kb` 页面壳公开。理由:①KB 含 `MEMORY.md` 私有笔记;②其余接口都要令牌,唯独它例外是隐患;③"只绑 127.0.0.1"的兜底太脆 —— `HOST` 只是 plist 一行 env,2026-09-06 曾改成 `0.0.0.0`,再开一次公开 KB 就整个网段可读。viewer.html 从同源 `localStorage('hermes_ui_token')` 取令牌(与主界面共用),401 时顶部弹补填提示。护栏:`routes.smoke.sh` 与 `healthcheck.sh` 各有一条"无 token 必须 401"断言。详见 `lib/routes/kb.js` 头部 + `KB_INTEGRATION.md` §认证策略。
+- ⚠️ 两个接口**返回形状不同**(list=数组,search=对象)。合并到 4173 时 viewer.html 的搜索分支直接对对象调 `.map()`,导致 KB 页搜索**永远显示"暂无内容"**(2026-09-11 修,已加 ui.smoke L6 断言锁死)。改这两个接口时两边一起看。
 - 数据源:`kb_inbox.md` / `kb_distilled.md` / `~/.hermes/memories/MEMORY.md`(实测 19/23/1 = 43 条)。
 - 智能体主动调用路径:`~/.hermes/skills/kb-query/SKILL.md`(对话中需要历史经验时调 `kb.py recall` 或 `curl /api/kb/search`)。
 - `kb/serve.py`(4174)已标弃用 → 降级为离线兜底;无 plist/cron/代码引用它。设计文档:`KB_INTEGRATION.md`。
@@ -127,12 +150,14 @@ A/B 实测(新旧均 require 真实 `lib/http.js`):旧版 `💥 unhandledRejecti
 - ✅ launchd 守护已装成功(state=running,RunAtLoad+KeepAlive);kickstart 可自重启。
 - ✅ KB 集成落地(viewer.html 同源化 + `/api/kb/*` + 顶栏入口 + kb-query 技能)。
 - ✅ P2-7 残留脚本归档到 `archive/one-off-fix-scripts-20260911/`;P2-8 serve.py 标弃用;P2-9 `resolvePython()` + sync.sh 动态解析 + `warnIfParseEmpty` 格式保鲜告警。
-- ✅ **git 建库完成**;**P1-6 测试基线完成**(**56 例单测** + **47 项路由冒烟** + **25 项浏览器冒烟(含 L5 降级层)** + **20 项健康自检**);**P1-3 四步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848) → lib/ 12 个域模块(849→141) → 前端 html/css/js 三分(1864→151)。
-  关键提交:`f5d8a7b` 建库 → `9f93aa2` 解析层 → `7f31a07` 路由表 → `6b3b0da` lib 域模块 → `a2e8c7c` 前端三分 → `cf5b03f` 备份 → `107676a` API 镜像 → `436bf0e` P0-2 加固 → `6867a89` P1-4 解析降级信号。
+- ✅ **git 建库完成**;**测试基线持续加厚**(**69 例单测** + **51 项路由冒烟** + **30 项浏览器冒烟(含 L5 降级层 / L6 KB 页层)** + **21 项健康自检**);**P1-3 四步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848) → lib/ 12 个域模块(849→141) → 前端 html/css/js 三分(1864→151)。
+  关键提交:`f5d8a7b` 建库 → `9f93aa2` 解析层 → `7f31a07` 路由表 → `6b3b0da` lib 域模块 → `a2e8c7c` 前端三分 → `cf5b03f` 备份 → `107676a` API 镜像 → `436bf0e` P0-2 加固 → `6867a89` P1-4 解析降级信号 → `47a1b67` P1-5+P2-10+P3-11+P3-12。
 - ✅ **P0-2 已完成**(提交 `436bf0e`):根因是**兜底 catch 二次写头** → `ERR_HTTP_HEADERS_SENT` → unhandledRejection → 进程退出(A/B 实测确认,客户端表现为 `HTTP 000` = "Failed to fetch")。已封堵 + 补 `req`/`res` error 监听 + 死亡归因(`[lifecycle]`) + 运行时心跳。详见上方「崩溃归因与加固」段。
 - ✅ **全局崩溃日志已两次实战生效**:前端拆分时抓到启动期 `ReferenceError`(并行 Edit 丢更新);P0-2 加固时抓到 `startHeartbeat is not a function`(漏了 export)。两次都是"启动即崩"级别的静默故障,现在都有精确堆栈 —— 配合 `test/wiring.test.js` 已能提前在测试阶段挡住第二类。
 - ✅ **P1-4 已完成**(提交 `6867a89`):解析失效不再静默 → `degraded` 信号贯穿到前端告警。详见上方「解析降级信号」段。
-- ⏳ 待办(按优先级):**P3-12 用量日志落盘**(`usageLog` 目前仅内存 60 轮,落 `~/.hermes/usage.jsonl` 才能看长期趋势)/ **P2-10 KB 认证决策**(公开只读需写进注释与文档,消除"这是不是漏洞"的模糊地带)/ **P1-5 静默 catch 治理**(`lib/` 已无空 catch,但 `public/app.js` 仍有几处 `catch (e) {}` 需标注意图)/ **P3-11 `docs/INDEX.md` 文档索引** / 前端 `app.js` 1422 行按域再分(已有语法网 + 浏览器网兜底,可暂缓)。
+- ✅ **P1-5 / P2-10 / P3-11 / P3-12 已完成**(提交 `47a1b67`,改进清单里的剩余四项一次做完)。详见上方「静默失败治理与用量落盘」段与「知识库(KB)集成」段。
+- ⏳ 待办(均不紧急,按优先级):前端 `app.js` 1500 行按域再分(已有语法网 + 浏览器网兜底,可暂缓);`POST /api/memory/save` 的恒真死代码注释(见下方小隐患);用户级技能目录整理(`caveman-*` / `ponytail-*` 职责重叠)。
+  **改进清单 `IMPROVEMENT_PLAN.md` 至此全部落地**(P0-1~P3-12)。下次要推进的是清单外的新方向,例如 `PLAN-hermes-serve.md` 的常驻后端改造(首字延迟热路径 37.1s → 0.7s,状态:待评审)。
   注:`parseSkillsList` **不是死代码** —— 文件里已写明"保留作为 CLI 表格解析的备用与回归锚点,勿删",别再当待清理项。
 - ✅ **离机备份 + 异地镜像已建立**(2026-09-11):`npm run backup`(本地 bundle,可还原)+ `npm run mirror`(GitHub 私有库 `2276304874-afk/hermes-agent`)。详见上方「备份与异地镜像」段。此前"提交只存在本地 .git"的单点风险已消除。
 - 📌 **标准验收命令一次跑全**:`npm test && npm run smoke && npm run ui && npm run health`;`npm run check` 覆盖 server.js + lib/** + lib/routes/** + public/app.js + scripts/** + test/**。
