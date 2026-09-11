@@ -8,6 +8,13 @@
 - 引擎:Hermes CLI(`~/.hermes/venvs/hermes/bin/hermes`)。调用必 `env -u PYTHONPATH`(WorkBuddy sitecustomize 劫持 mkdir);本地请求必 `NO_PROXY=127.0.0.1,localhost`。
 - 进度:server.js 每 150ms 轮询 `~/.hermes/state.db` messages 表 + oneshot.py 流式补丁(启动自愈)。静态文件实时读盘,改 HTML 即时生效;改 server.js 需 kickstart。
 
+## 代码结构与工程化(2026-09-11 起)
+- **已纳入 git**(`main`,身份 `zhaocaozheng@localhost` 仅仓库级,未动全局)。首次提交 `f5d8a7b`,`refactor(parse)` `9f93aa2`。`.gitignore` 忽略 `.workbuddy/kb.db`(FTS5,可重建)、`kb_*_state.json`、`.workbuddy/tmp/`、`.mimosa/ .v2c/ .video_agent/ .zcode/`、`__pycache__`、`*.bak-*`;**kb_inbox.md / kb_distilled.md / memory/ 是内容资产,必须入库**。
+- **分层现状**:`server.js`(1343 行,HTTP 路由+IO) → `lib/parse.js`(177 行,纯解析层,零副作用)。拆分原则:**纯函数外移、路由不动**。
+- **测试**:`test/parse.test.js`(22 例,node:test 零依赖),`npm test`。fixture 必须标 `[真实]`(抄自本机 CLI 实际输出)/`[合成]`(按已知格式构造)。
+  - ⚠️ 本机 node 22.22.2 的 `node --test <目录>` 会被当成模块路径 → 必须写 `node --test test/*.test.js`。
+- **健康自检**:`bash healthcheck.sh`(19 项,退出码 0/1)。改完代码的标准流程 = `npm test` + `healthcheck.sh` + `git commit`。
+
 ## 模型与 Ollama
 - **主模型(2026-09-10 起):`hermes-local-gemma4`**(base `gemma4:e4b`,PLE 稀疏激活,9.6GB 盘 / ~3.3GB 驻留,128K ctx,原生 tools+vision+audio)。**一个模型同时扛对话/工具/视觉/音频**,已不再需要 llava 换载。
 - Ollama.app(GUI)托管,max_loaded_models 默认 1。
@@ -25,6 +32,8 @@
 - **判"功能缺失"前先确认跑的是新代码**:旧实例常占着端口,新代码未重启就测会得假阴性。用 `/api/*` 新路由 404/unauthorized 反推。
 - **plist 里禁止在 `<array>`/`<dict>` 内部写 XML 注释**:`plutil` 能过但 launchd 报 `EX_CONFIG 78`。注释只能放文件头。
 - all./usr/bin 与托管 python 均支持 sqlite FTS5 trigram,故 KB 解释器可安全回退;但仍应动态解析而非硬编码版本目录(见 `resolvePython()` / `kb/sync.sh`)。
+- **写含中文的 bash 脚本:变量引用一律写 `${VAR}`**。写成 `$VAR` 且后面紧跟全角字符(如 `）`、`，`)时,bash 会把那些字节并进变量名,`set -u` 下直接报 `unbound variable`(healthcheck.sh 踩过)。
+- **`grep -c` 无匹配时输出 `0` 但退出码为 1** → 不可写 `F=$(grep -c x f || echo 0)`,会得到 `"0\n0"`。正确写法:`F=$(grep -c x f 2>/dev/null); F="${F:-0}"`。
 
 ## 知识库(KB)集成
 - 统一入口=主服务 4173:`GET /kb`(托管 `kb/viewer.html`)、`GET /api/kb/list?cat=inbox|distilled|memory|all`(**返回纯数组**)、`GET /api/kb/search?q=`(复用 recallHits)、`GET /api/kb/status`。均为公开只读(仅 127.0.0.1)。
@@ -37,5 +46,6 @@
 - ✅ KB 集成落地(viewer.html 同源化 + `/api/kb/*` + 顶栏入口 + kb-query 技能)。
 - ✅ P2-7 残留脚本归档到 `archive/one-off-fix-scripts-20260911/`;
 - ✅ P2-8 serve.py 标弃用;P2-9 `resolvePython()` + sync.sh 动态解析 + `warnIfParseEmpty` 格式保鲜告警。
-- ⏳ 待办:P0-2 崩溃根因(等复现)、P1-3 拆单体、P1-6 补测试、P2-10 KB 认证决策、**项目非 git 仓库(建议 git init)**。
-- 改进清单见 `IMPROVEMENT_PLAN.md`;N8 等项目详情见 `UPGRADE_ROADMAP.md` 与 daily logs。
+- ✅ **git 建库完成**(2 次提交);**P1-6 测试基线完成**(22 例);**P1-3 第一步完成**(抽出 lib/parse.js)。
+- ⏳ 待办:P0-2 崩溃根因(等复现)、P1-3 继续拆(路由/chat/auth 分模块)、P2-10 KB 认证决策。
+- 改进清单见 `IMPROVEMENT_PLAN.md`;历史路线图见 `UPGRADE_ROADMAP.md` 与 daily logs。

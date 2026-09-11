@@ -53,9 +53,18 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 // P1-3 拆分第一步：纯解析层抽到 lib/parse.js（零副作用、可 node:test 直测）
 const P = require('./lib/parse');
-const {
-  warnIfParseEmpty, parseSessions, parseCronList, parseMcpList, kbParseBlocks,
-} = P;
+// ⚠️ warnIfParseEmpty 必须留在这里：runSessionsList（会话列表）仍在 server.js 内调用它。
+const { parseSessions, warnIfParseEmpty, kbParseBlocks } = P;
+// P1-3 拆分第二步：路由表 + 领域路由模块（lib/router.js + lib/routes/*）
+// 各模块自带各自的解析依赖（如 toolbox.js 引 parseMcpList/parseCronList），此处不再重复引入。
+const { createRouter } = require('./lib/router');
+const KbRoutes = require('./lib/routes/kb');
+const SessionRoutes = require('./lib/routes/session');
+const SystemRoutes = require('./lib/routes/system');
+const ProviderRoutes = require('./lib/routes/provider');
+const MediaRoutes = require('./lib/routes/media');
+const ChatRoutes = require('./lib/routes/chat');
+const ToolboxRoutes = require('./lib/routes/toolbox');
 
 const PORT = process.env.PORT || 4173;
 const HOST = process.env.HOST || '127.0.0.1';   // D4: 局域网访问设 HOST=0.0.0.0（token 认证已就位）
@@ -745,581 +754,78 @@ function ollamaStatusSync() {
   });
 }
 
-/* ---------- SSE 聊天端点 ---------- */
-async function handleChat(req, res) {
-  let body;
-  try { body = JSON.parse(req.bodyText || ''); } catch { body = {}; }
-  const rawPrompt = (body.prompt || '').trim();
-  if (!rawPrompt) { sendJSON(res, 400, { error: 'empty prompt' }); return; }
-  // prompt 超长截断，避免把上下文撑爆或被用来打满内存
-  const prompt = rawPrompt.length > PROMPT_LIMIT ? rawPrompt.slice(0, PROMPT_LIMIT) + '…' : rawPrompt;
-  const allowDangerous = body.allowDangerous === true;
-  const runId = crypto.randomUUID();
-
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    'Connection': 'keep-alive',
-    'X-Accel-Buffering': 'no'
-  });
-  res.write('retry: 3000\n\n');
-
-  // ---- 模型解析 + 云端健康检查 + 自动降级 ----
-  const chosen = resolveModel(body.model);
-  let model = chosen.model;
-  let extraEnv = null;
-  let providerArgs = [];
-  if (chosen.cloud) {
-    const providers = loadCloudProviders();
-    const cfg = providers[chosen.providerId];
-    const preset = PROVIDER_PRESETS[chosen.providerId];
-    sse(res, 'notice', { message: `正在检测云端接口 ${preset.label} …` });
-    if (!cfg || !cfg.apiKey) {
-      sse(res, 'notice', { message: `云端 ${preset.label} 未配置 API key，已降级到本地 ${DEFAULT_MODEL}` });
-    } else {
-      const hc = await providerHealth(chosen.providerId, cfg);
-      if (hc.ok) {
-        extraEnv = { [preset.env]: cfg.apiKey };
-        if (cfg.baseUrl && preset.baseEnv) extraEnv[preset.baseEnv] = cfg.baseUrl;
-        providerArgs = ['--provider', chosen.providerId];
-        model = chosen.model;
-        sse(res, 'notice', { message: `云端 ${preset.label} 可达 (${hc.latencyMs}ms)，使用 ${chosen.model}` });
-      } else {
-        sse(res, 'notice', { message: `云端不可达（${hc.error}），已自动降级到本地 ${DEFAULT_MODEL}` });
-      }
-    }
-    if (!providerArgs.length) { chosen.cloud = false; model = DEFAULT_MODEL; }
-  }
-
-  const args = [];
-  let sessionId = body.sessionId || null;
-  if (sessionId) args.push('--resume', sessionId);
-  // 新会话：自动召回相关历史经验并前缀进 prompt；
-  // 续轮（有 sessionId）已由 Hermes 自带上下文承载，不重复注入，避免噪声。
-  let finalPrompt = prompt;
-  if (!sessionId) {
-    const ctx = await recallContext(prompt);
-    if (ctx) finalPrompt = ctx + '\n\n' + prompt;
-  }
-  // 注意：-z 模式内部强制 yolo，--yolo 标志多余已移除；安全由 pre_tool_call hook 负责。
-  args.push('-z', finalPrompt, '--cli', '--in', WORKSPACE);
-  args.push('-m', model, ...providerArgs);
-
-  const streamFile = path.join(os.tmpdir(), `hermes-stream-${runId}.txt`);
-  const t0 = Date.now();
-  const baseline = latestSessionId();           // 用于识别「本次新建」的会话
-  let lastMsgId = sessionId ? maxMessageId(sessionId) : 0; // 续轮只推新增消息
-  let exited = false;
-  let firstTokenMs = null, tokenChars = 0, lastTokenAt = null, toolCallCount = 0;
-  const streamOffset = { pos: 0 };
-
-  const child = spawn(HERMES, args, { env: hermesEnv({ allowDangerous, streamFile, extraEnv }), cwd: WORKSPACE });
-  active.set(runId, child);
-  if (sessionId) active.set(sessionId, child);
-
-  sse(res, 'ready', { runId, sessionId, allowDangerous, model, cloud: chosen.cloud });
-
-  const finish = () => {
-    clearInterval(timer);
-    if (sessionId) active.delete(sessionId);
-    active.delete(runId);
-    try { fs.unlink(streamFile, () => {}); } catch {}
-  };
-  child.on('close', () => { exited = true; });
-  child.on('error', e => { exited = true; sse(res, 'error', { message: e.message }); });
-
-  const timer = setInterval(() => {
-    try {
-      // 1) token 流（真流式，仅本地模型跑 Hermes 引擎时有效）
-      tailStreamFile(streamFile, streamOffset, (text) => {
-        if (firstTokenMs == null) firstTokenMs = Date.now() - t0;
-        lastTokenAt = Date.now();
-        tokenChars += text.length;
-        sse(res, 'token', { text });
-      });
-      // 2) DB 轮询（消息行 = 权威记录）
-      if (!sessionId) {
-        const cur = latestSessionId();
-        if (cur && cur !== baseline) { sessionId = cur; sse(res, 'session', { sessionId }); active.set(sessionId, child); }
-      }
-      if (sessionId) {
-        const rows = newMessages(sessionId, lastMsgId);
-        for (const r of rows) {
-          lastMsgId = r.id;
-          if (r.role === 'tool') toolCallCount++;
-          sse(res, 'msg', {
-            id: r.id, role: r.role, toolName: r.tool_name,
-            content: r.content, toolCalls: r.tool_calls,
-            displayKind: r.display_kind, reasoning: r.reasoning, ts: r.timestamp
-          });
-        }
-      }
-      if (exited) {
-        const elapsed = (Date.now() - t0) / 1000;
-        // 粗略 tokens/sec：只按生成窗口（首 token → 末 token）计，排除 Hermes 启动耗时
-        // 中文 ≈ 1 字/token，英文 ≈ 4 字符/token，取 2.5 折中
-        const genWindowSec = firstTokenMs != null && lastTokenAt ? (lastTokenAt - t0 - firstTokenMs) / 1000 : 0;
-        const charsPerSec = genWindowSec > 0.5 && tokenChars > 0 ? Math.round(tokenChars / genWindowSec / 2.5) : null;
-        sse(res, 'done', {
-          elapsed: elapsed.toFixed(1), sessionId,
-          firstTokenMs: firstTokenMs != null ? (firstTokenMs / 1000).toFixed(1) : null,
-          charsPerSec
-        });
-        recordUsage({
-          sessionId, model, cloud: !!chosen.cloud,
-          elapsedSec: Math.round(elapsed * 10) / 10,
-          firstTokenSec: firstTokenMs != null ? Math.round(firstTokenMs / 100) / 10 : null,
-          tokPerSec: charsPerSec, toolCalls: toolCallCount,
-          prompt: prompt.slice(0, 60)
-        });
-        finish();
-        res.end();
-        // 本地模型保活：运行结束后把驻留时间续到 2h
-        if (!chosen.cloud) prewarmOllama(model);
-      }
-    } catch (e) { /* 忽略单次轮询异常 */ }
-  }, POLL_MS);
-
-  req.on('close', () => {
-    clearInterval(timer);
-    if (!exited) { try { child.kill('SIGTERM'); } catch {} }
-    try { fs.unlink(streamFile, () => {}); } catch {}
-    try { res.end(); } catch {}
-  });
-}
-
-const server = http.createServer(async (req, res) => {
-  try {
-    // ---------- KB Integration: 知识库查看器（公开、只读、仅 127.0.0.1）----------
-    // 与静态文件同级、认证前暴露：viewer.html 是只读内部页面，原 4174 服务也无认证。
-    if (req.method === 'GET' && (req.url === '/kb' || req.url.startsWith('/kb/'))) {
-      return fs.readFile(path.join(WORKSPACE, 'kb', 'viewer.html'), (err, data) => {
-        if (err) { res.writeHead(404); res.end('not found'); return; }
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-cache, no-store, must-revalidate' });
-        res.end(data);
-      });
-    }
-    if (req.method === 'GET' && req.url.startsWith('/api/kb/list')) {
-      const m = (req.url.split('?')[1] || '').match(/(?:^|&)cat=([^&]*)/);
-      return sendJSON(res, 200, kbListEntries(m ? decodeURIComponent(m[1]) : 'all'));
-    }
-    if (req.method === 'GET' && req.url.startsWith('/api/kb/search')) {
-      const m = (req.url.split('?')[1] || '').match(/(?:^|&)q=([^&]*)/);
-      const q = m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
-      const hits = q ? recallHits(q) : [];
-      const results = hits.slice(0, 50).map(h => ({ cat: 'search', type: h.section || '', src: h.source || '', text: h.text || '', score: h.score }));
-      return sendJSON(res, 200, { query: q, count: results.length, results });
-    }
-    if (req.method === 'GET' && req.url.startsWith('/api/kb/status')) {
-      const entries = kbListEntries('all');
-      const counts = { inbox: 0, distilled: 0, memory: 0 };
-      for (const e of entries) if (e.cat in counts) counts[e.cat]++;
-      const ollama = await ollamaStatusSync();
-      return sendJSON(res, 200, { kb_port: PORT, counts, total: entries.length, ollama });
-    }
-
-    // 静态文件无需认证（登录页要能加载）
-    if (req.method === 'GET' && !req.url.startsWith('/api/')) {
-      return serveStatic(req, res);
-    }
-    // 所有 /api/* 必须带 token
-    if (!checkAuth(req)) {
-      return sendJSON(res, 401, { error: 'unauthorized' });
-    }
-
-    if (req.method === 'GET' && req.url.startsWith('/api/sessions')) {
-      return sendJSON(res, 200, { sessions: await runSessionsList(30) });
-    }
-    if (req.method === 'GET' && req.url.startsWith('/api/history')) {
-      const u = new URL(req.url, 'http://127.0.0.1');
-      const sid = (u.searchParams.get('session') || '').trim();
-      if (!sid) return sendJSON(res, 400, { error: 'session required' });
-      const rows = withDB(d => d.prepare(
-        'SELECT id, role, tool_name, content, tool_calls, display_kind, reasoning, timestamp FROM messages WHERE session_id=? ORDER BY id'
-      ).all(sid)) || [];
-      return sendJSON(res, 200, { sessionId: sid, messages: rows });
-    }
-    // L4: 会话重命名
-    if (req.method === 'POST' && req.url.startsWith('/api/session/rename')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const sid = String(b.id || '').trim();
-      const title = String(b.title || '').trim();
-      if (!SESSION_ID_RE.test(sid)) return sendJSON(res, 400, { error: 'bad session id' });
-      if (!title || title.length > 80) return sendJSON(res, 400, { error: '标题需 1-80 字符' });
-      const r = await runHermes(['sessions', 'rename', sid, title]);
-      return sendJSON(res, r.code === 0 ? 200 : 500, r.code === 0 ? { ok: true } : { error: 'rename failed: ' + r.err });
-    }
-    // L4: 会话删除
-    if (req.method === 'POST' && req.url.startsWith('/api/session/delete')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const sid = String(b.id || '').trim();
-      if (!SESSION_ID_RE.test(sid)) return sendJSON(res, 400, { error: 'bad session id' });
-      const r = await runHermes(['sessions', 'delete', sid, '--yes']);
-      return sendJSON(res, r.code === 0 ? 200 : 500, r.code === 0 ? { ok: true } : { error: 'delete failed: ' + r.err });
-    }
-    // L4: 导出会话 Markdown（附件下载）
-    if (req.method === 'GET' && req.url.startsWith('/api/session/export')) {
-      const u = new URL(req.url, 'http://127.0.0.1');
-      const sid = (u.searchParams.get('session') || '').trim();
-      if (!SESSION_ID_RE.test(sid)) return sendJSON(res, 400, { error: 'bad session id' });
-      const rows = withDB(d => d.prepare(
-        'SELECT role, tool_name, content, tool_calls, timestamp FROM messages WHERE session_id=? ORDER BY id'
-      ).all(sid)) || [];
-      res.writeHead(200, {
-        'Content-Type': 'text/markdown; charset=utf-8',
-        'Content-Disposition': `attachment; filename="hermes-${sid}.md"`
-      });
-      return res.end(buildSessionMarkdown(sid, rows));
-    }
-    // L4: 健康（含流式补丁状态）
-    if (req.method === 'GET' && req.url.startsWith('/api/health')) {
-      let uiVersion = null;
-      try { uiVersion = String(fs.statSync(path.join(PUBLIC_DIR, 'index.html')).mtimeMs); } catch { /* 版本探测失败不阻断 */ }
-      return sendJSON(res, 200, { ok: true, uptimeSec: Math.round(process.uptime()), patch: patchState, uiVersion });
-    }
-    // L4: Ollama 运行状态
-    if (req.method === 'GET' && req.url.startsWith('/api/status')) {
-      return sendJSON(res, 200, { ollama: await ollamaStatus() });
-    }
-    // L4: 近轮用量
-    if (req.method === 'GET' && req.url.startsWith('/api/usage')) {
-      return sendJSON(res, 200, { runs: usageLog.slice(-30).reverse() });
-    }
-    if (req.method === 'GET' && req.url.startsWith('/api/models')) {
-      const providers = loadCloudProviders();
-      // 只列真实已装的本地模型（与 /api/tags 取交集），避免下拉出现不存在的模型。
-      // 纯 embedding 模型（bge-m3 等，capabilities 仅含 embedding）排除在对话下拉外。
-      const norm = s => String(s || '').replace(/:latest$/, '');
-      const tags = await ollamaGet('/api/tags');
-      let local;
-      if (tags && Array.isArray(tags.models)) {
-        const chatModels = tags.models
-          .filter(m => !(m.capabilities || []).includes('embedding'))
-          .map(m => m.name);
-        const chatSet = new Set(chatModels.map(norm));
-        const seen = new Set();
-        local = [];
-        for (const m of LOCAL_MODELS) {            // 偏好序优先
-          if (chatSet.has(norm(m)) && !seen.has(norm(m))) { local.push({ value: norm(m), label: norm(m) }); seen.add(norm(m)); }
-        }
-        for (const m of chatModels) {              // 其余已装模型补在后面
-          if (!seen.has(norm(m))) { local.push({ value: m, label: m }); seen.add(norm(m)); }
-        }
-      } else {
-        local = LOCAL_MODELS.map(m => ({ value: m, label: m }));
-      }
-      const cloud = [];
-      for (const [id, cfg] of Object.entries(providers)) {
-        const preset = PROVIDER_PRESETS[id];
-        if (!preset || !cfg.apiKey) continue;
-        for (const m of (cfg.models || [])) {
-          if (m) cloud.push({ value: `cloud:${id}/${m}`, label: `${preset.label} · ${m}` });
-        }
-      }
-      return sendJSON(res, 200, { local, cloud, default: DEFAULT_MODEL });
-    }
-    if (req.method === 'GET' && req.url.startsWith('/api/providers')) {
-      const providers = loadCloudProviders();
-      const out = {};
-      for (const [id, cfg] of Object.entries(providers)) {
-        out[id] = {
-          label: (PROVIDER_PRESETS[id] || {}).label || id,
-          apiKeyMasked: maskKey(cfg.apiKey),
-          hasKey: !!cfg.apiKey,
-          baseUrl: cfg.baseUrl || (PROVIDER_PRESETS[id] || {}).base || '',
-          models: cfg.models || [],
-          health: healthCache.get(id) || null
-        };
-      }
-      return sendJSON(res, 200, { providers: out, presets: PROVIDER_PRESETS });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/providers/save')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const id = String(b.id || '').trim();
-      if (!PROVIDER_PRESETS[id]) return sendJSON(res, 400, { error: 'unknown provider id' });
-      const providers = loadCloudProviders();
-      const prev = providers[id] || {};
-      providers[id] = {
-        apiKey: (b.apiKey && String(b.apiKey).trim()) || prev.apiKey || '',
-        baseUrl: (b.baseUrl != null ? String(b.baseUrl).trim() : prev.baseUrl || ''),
-        models: Array.isArray(b.models) ? b.models.map(s => String(s).trim()).filter(Boolean) : (prev.models || [])
-      };
-      if (!providers[id].apiKey) return sendJSON(res, 400, { error: 'apiKey required' });
-      saveCloudProviders(providers);
-      return sendJSON(res, 200, { ok: true, apiKeyMasked: maskKey(providers[id].apiKey) });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/providers/delete')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const providers = loadCloudProviders();
-      delete providers[b.id];
-      saveCloudProviders(providers);
-      return sendJSON(res, 200, { ok: true });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/provider/health')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const providers = loadCloudProviders();
-      const cfg = providers[b.id];
-      if (!cfg) return sendJSON(res, 404, { error: 'provider not configured' });
-      const hc = await providerHealth(b.id, cfg, true);
-      return sendJSON(res, 200, hc);
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/prewarm')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const m = resolveModel(b.model);
-      if (m.cloud) return sendJSON(res, 200, { ok: false, error: '云端模型无需预热' });
-      prewarmOllama(m.model);
-      return sendJSON(res, 200, { ok: true, model: m.model });
-    }
-    // C4: 多模态理解（body 上限放宽到 8MB，容纳压缩后的 base64 图/音频）
-    if (req.method === 'POST' && req.url.startsWith('/api/vision')) {
-      const raw = await readBody(req, 8 * 1024 * 1024);
-      let b = {};
-      try { b = JSON.parse(raw || '{}'); } catch { return sendJSON(res, 400, { error: 'bad json' }); }
-      const img = String(b.image || '');
-      if (!img) return sendJSON(res, 400, { error: 'image required' });
-      const r = await describeImage(img, String(b.prompt || '').slice(0, 500));
-      return sendJSON(res, r.ok ? 200 : 502, r.ok ? { text: r.text } : { error: r.error });
-    }
-    // 本地语音转写：前端录音（WAV base64）→ gemma4:e4b 原生音频 → 文字。
-    // 替代走云端的 webkitSpeechRecognition，音频不出本机（local-first）。
-    if (req.method === 'POST' && req.url.startsWith('/api/transcribe')) {
-      const raw = await readBody(req, 16 * 1024 * 1024);
-      let b = {};
-      try { b = JSON.parse(raw || '{}'); } catch { return sendJSON(res, 400, { error: 'bad json' }); }
-      const audio = String(b.audio || '');
-      if (!audio) return sendJSON(res, 400, { error: 'audio required' });
-      const r = await transcribeAudio(audio);
-      return sendJSON(res, r.ok ? 200 : 502, r.ok ? { text: r.text } : { error: r.error });
-    }
-    // B1: 文件上传落盘（大文本/二进制不适合内联 prompt，存 ~/.hermes/uploads 后
-    // 把路径注入对话，让 Hermes 用自己的文件工具读取。base64 上限 20MB ≈ 落盘 15MB）
-    if (req.method === 'POST' && req.url.startsWith('/api/upload')) {
-      const raw = await readBody(req, 24 * 1024 * 1024);
-      let b = {};
-      try { b = JSON.parse(raw || '{}'); } catch { return sendJSON(res, 400, { error: 'bad json' }); }
-      const name = String(b.name || 'file').split(/[/\\]/).pop().slice(-120) || 'file';
-      const data = String(b.data || '');
-      if (!data) return sendJSON(res, 400, { error: 'data required' });
-      const buf = Buffer.from(data, 'base64');
-      if (!buf.length) return sendJSON(res, 400, { error: 'empty file' });
-      if (buf.length > 15 * 1024 * 1024) return sendJSON(res, 413, { error: '文件超过 15MB 上限' });
-      const dir = `${HOME}/.hermes/uploads`;
-      try {
-        fs.mkdirSync(dir, { recursive: true });
-        // 时间戳前缀防覆盖 + 文件名只保留安全字符（中文保留）
-        const safe = `${Date.now()}-${name.replace(/[^A-Za-z0-9._\-\u4e00-\u9fff]+/g, '_')}`;
-        const p = path.join(dir, safe);
-        fs.writeFileSync(p, buf);
-        return sendJSON(res, 200, { ok: true, path: p, name: safe });
-      } catch (e) {
-        return sendJSON(res, 500, { error: 'save failed: ' + e.message });
-      }
-    }
-    // 豆包式"为你推荐"：答案完成后用当前模型生成 3 条追问（前台非阻塞调用，失败静默返回空）
-    if (req.method === 'POST' && req.url.startsWith('/api/suggest')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const answer = String(b.answer || '').slice(-1500).trim();
-      const m = resolveModel(String(b.model || ''));
-      if (!answer || m.cloud) return sendJSON(res, 200, { suggestions: [] });
-      const body = JSON.stringify({
-        model: m.model,
-        messages: [
-          { role: 'system', content: '根据这段AI回答，提出3个用户最可能追问的简短问题。只输出一个JSON字符串数组，格式如 ["问题1","问题2","问题3"]，禁止输出任何其他内容，每个问题不超过18个字。' },
-          { role: 'user', content: answer }
-        ],
-        stream: false, keep_alive: '2h',
-        think: false,                       // qwen3.5 思考模型：关闭思考直出正文（否则 token 全耗在 reasoning 里）
-        options: { temperature: 0.4, num_predict: 130 }
-      });
-      const suggestions = await new Promise((resolve) => {
-        const rq = http.request(OLLAMA + '/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, timeout: 45000 }, (r) => {
-          let buf = '';
-          r.on('data', d => buf += d);
-          r.on('end', () => {
-            try {
-              const content = String(JSON.parse(buf).message.content || '');
-              const s = content.slice(content.indexOf('['), content.lastIndexOf(']') + 1);
-              const arr = JSON.parse(s);
-              resolve(Array.isArray(arr) ? arr.filter(x => typeof x === 'string' && x.trim()).slice(0, 3) : []);
-            } catch { resolve([]); }
-          });
-        });
-        rq.on('error', () => resolve([]));
-        rq.on('timeout', () => { rq.destroy(); resolve([]); });
-        rq.end(body);
-      });
-      return sendJSON(res, 200, { suggestions });
-    }
-    if (req.method === 'GET' && req.url.startsWith('/api/auth')) {
-      return sendJSON(res, 200, { ok: true });
-    }
-    /* ---------- 知识库 slash 命令 /kb 的召回接口 ---------- */
-    if (req.method === 'GET' && req.url.startsWith('/api/kb')) {
-      const q = (req.url.split('?')[1] || '');
-      const m = q.match(/(?:^|&)q=([^&]*)/);
-      const query = m ? decodeURIComponent(m[1].replace(/\+/g, ' ')) : '';
-      const hits = query ? recallHits(query) : [];
-      // 相关性阈值：与自动召回一致，弱相关不返回（前端按"未找到"提示）
-      const RECALL_MIN_SCORE = 0.15;
-      const filtered = hits.filter(h => (h.score ?? 0) >= RECALL_MIN_SCORE);
-      const slim = (filtered.length ? filtered : hits).slice(0, 6).map(h => ({
-        section: h.section || '经验', source: h.source || '', text: h.text || '',
-        score: typeof h.score === 'number' ? Math.round(h.score * 100) / 100 : h.score,
-      }));
-      return sendJSON(res, 200, { query, hits: slim, count: slim.length });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/chat')) {
-      req.bodyText = await readBody(req);
-      return handleChat(req, res);
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/stop')) {
-      const body = JSON.parse(await readBody(req) || '{}');
-      const child = (body.runId && active.get(body.runId)) || (body.sessionId && active.get(body.sessionId));
-      if (child) { try { child.kill('SIGTERM'); } catch {} return sendJSON(res, 200, { ok: true }); }
-      return sendJSON(res, 200, { ok: false, error: 'no active session' });
-    }
-    /* ---------- L5: MCP 服务管理 ---------- */
-    if (req.method === 'GET' && req.url.startsWith('/api/mcp')) {
-      const r = await runHermes(['mcp', 'list']);
-      const servers = parseMcpList(r.out);
-      warnIfParseEmpty('mcp list', r.out, servers.length);
-      return sendJSON(res, 200, { servers, raw: r.out.slice(0, 2000) });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/mcp/add')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const name = String(b.name || '').trim();
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) return sendJSON(res, 400, { error: '名称仅限字母数字-_（1-64 位）' });
-      const args = ['mcp', 'add', name];
-      if (b.url) args.push('--url', String(b.url).trim());
-      else if (b.command) {
-        args.push('--command', String(b.command).trim());
-        for (const a of (Array.isArray(b.args) ? b.args : String(b.args || '').split(/\s+/))) {
-          if (String(a).trim()) args.push(String(a).trim());
-        }
-      } else return sendJSON(res, 400, { error: '需要 url 或 command' });
-      // add 可能询问 "Save config anyway? [y/N]" → 自动应答 y
-      const r = await runHermes(args, 'y\n');
-      return sendJSON(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, message: (r.out + r.err).slice(-300) });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/mcp/remove')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const name = String(b.name || '').trim();
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) return sendJSON(res, 400, { error: 'bad name' });
-      const r = await runHermes(['mcp', 'remove', name], 'y\n');
-      return sendJSON(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, message: (r.out + r.err).slice(-300) });
-    }
-
-    /* ---------- L5: 定时任务 ---------- */
-    if (req.method === 'GET' && req.url.startsWith('/api/cron')) {
-      const [list, status] = await Promise.all([runHermes(['cron', 'list']), runHermes(['cron', 'status'])]);
-      const jobs = parseCronList(list.out);
-      warnIfParseEmpty('cron list', list.out, jobs.length);
-      return sendJSON(res, 200, {
-        jobs,
-        gatewayOk: /running|✓/.test(status.out) && !/not running/.test(status.out),
-        raw: list.out.slice(0, 3000)
-      });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/cron/create')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const schedule = String(b.schedule || '').trim();
-      const prompt = String(b.prompt || '').trim();
-      const name = String(b.name || '').trim().slice(0, 60);
-      if (!schedule || /\n/.test(schedule)) return sendJSON(res, 400, { error: 'schedule 必填（如 30m / every 2h / 0 9 * * *）' });
-      if (!prompt || prompt.length > 2000) return sendJSON(res, 400, { error: 'prompt 必填（≤2000 字符）' });
-      const args = ['cron', 'create', schedule, prompt];
-      if (name) args.push('--name', name);
-      const r = await runHermes(args);
-      return sendJSON(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, message: (r.out + r.err).slice(-400) });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/cron/action')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const id = String(b.id || '').trim();
-      const action = String(b.action || '');
-      if (!/^[0-9a-f]{6,}$/.test(id)) return sendJSON(res, 400, { error: 'bad job id' });
-      if (!['pause', 'resume', 'run', 'remove'].includes(action)) return sendJSON(res, 400, { error: 'bad action' });
-      // remove 需要交互确认 y
-      const r = await runHermes(['cron', action, id], action === 'remove' ? 'y\n' : null);
-      return sendJSON(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, message: (r.out + r.err).slice(-300) });
-    }
-
-    /* ---------- L5: 技能管理 ---------- */
-    if (req.method === 'GET' && req.url.startsWith('/api/skills')) {
-      return sendJSON(res, 200, { skills: scanLocalSkills() });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/skills/search')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const q = String(b.query || '').trim().slice(0, 100);
-      if (!q) return sendJSON(res, 400, { error: 'query required' });
-      const r = await runHermes(['skills', 'search', q]);
-      return sendJSON(res, 200, { raw: (r.out || r.err).slice(0, 4000) });
-    }
-    // 本地语义检索：bge-m3 嵌入 → 余弦相似度 → 返回最相关的已装技能（自然语言找技能）
-    if (req.method === 'POST' && req.url.startsWith('/api/skills/find')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const q = String(b.query || '').trim().slice(0, 200);
-      if (!q) return sendJSON(res, 400, { error: 'query required' });
-      const idx = await ensureSkillIndex();
-      if (!idx.items.length) return sendJSON(res, 200, { matches: [], fallback: true });
-      const qv = await embedTexts([q]);
-      if (!qv || !qv[0]) return sendJSON(res, 200, { matches: [], fallback: true });
-      const matches = idx.items
-        .map(it => ({ name: it.name, description: it.description, score: cosine(qv[0], it.vec) }))
-        .sort((x, y) => y.score - x.score)
-        .slice(0, Number(b.top) || 8);
-      return sendJSON(res, 200, { matches });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/skills/install')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const name = String(b.name || '').trim().slice(0, 100);
-      if (!name || /\s/.test(name)) return sendJSON(res, 400, { error: 'bad skill name' });
-      const r = await runHermes(['skills', 'install', name], 'y\n');
-      return sendJSON(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, message: (r.out + r.err).slice(-400) });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/skills/uninstall')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const name = String(b.name || '').trim().slice(0, 100);
-      if (!name || /\s/.test(name)) return sendJSON(res, 400, { error: 'bad skill name' });
-      const r = await runHermes(['skills', 'uninstall', name], 'y\n');
-      return sendJSON(res, r.code === 0 ? 200 : 500, { ok: r.code === 0, message: (r.out + r.err).slice(-400) });
-    }
-
-    /* ---------- L5: 记忆（MEMORY.md / USER.md 直读直写） ---------- */
-    if (req.method === 'GET' && req.url.startsWith('/api/memory')) {
-      let memory = '', user = '';
-      try { memory = fs.readFileSync(MEMORY_FILE, 'utf8'); } catch {}
-      try { user = fs.readFileSync(USER_FILE, 'utf8'); } catch {}
-      return sendJSON(res, 200, { memory, user });
-    }
-    if (req.method === 'POST' && req.url.startsWith('/api/memory/save')) {
-      const b = JSON.parse(await readBody(req) || '{}');
-      const which = b.which === 'user' ? USER_FILE : MEMORY_FILE;
-      // 防御：只允许写固定路径的两个记忆文件
-      if (which !== MEMORY_FILE && which !== USER_FILE) return sendJSON(res, 400, { error: 'bad target' });
-      const content = String(b.content || '');
-      if (content.length > 200_000) return sendJSON(res, 400, { error: '内容过大（>200KB）' });
-      try {
-        fs.mkdirSync(MEMORY_DIR, { recursive: true });
-        fs.writeFileSync(which, content, { mode: 0o600 });
-        return sendJSON(res, 200, { ok: true });
-      } catch (e) {
-        return sendJSON(res, 500, { error: e.message });
-      }
-    }
-
-    sendJSON(res, 404, { error: 'not found' });
-  } catch (e) {
-    sendJSON(res, 500, { error: e.message });
-  }
-});
-
+/* ---------- 启动自检（顺序固定：流式补丁 → 日志截断 → 上传清扫） ---------- */
 // L4: 启动时自愈 oneshot 流式补丁（hermes update 覆盖后自动重打）
+// ⚠️ 必须定义在 ctx 之前：/api/health 要读 patchState，否则 const 会 TDZ 报错。
 const patchState = ensureOneshotPatch();
 // D2: 启动时检查并截断超限的 launchd 捕获日志
 trimOversizedLogs();
 // B1: 启动清扫过期上传文件，此后每 24h 一次
 cleanStaleUploads();
 setInterval(cleanStaleUploads, 24 * 3600 * 1000);
+
+/* ---------- 路由装配（P1-3 第二步：原约 420 行 if 链 → 路由表 + 领域模块） ----------
+ * 匹配语义与原实现完全一致：顺序遍历、首个命中即处理、前缀匹配（见 lib/router.js）。
+ * 装配顺序逐条对应原 if 链，改动时请保持：
+ *   公开组（认证前）→ 静态文件 → 认证闸门 → 认证组 → 404
+ *
+ * ctx 是显式依赖袋：路由模块只允许使用这里列出的东西。
+ * 好处是「谁依赖什么」一眼可见，也为下一步把这些 helper 拆进 lib/ 铺路。 */
+const publicRouter = createRouter('public');
+const apiRouter = createRouter('api');
+
+const ctx = {
+  // —— 常量 / 路径 ——
+  PORT, HOME, WORKSPACE, PUBLIC_DIR, HERMES, OLLAMA,
+  LOCAL_MODELS, DEFAULT_MODEL, PROMPT_LIMIT, POLL_MS,
+  MEMORY_FILE, USER_FILE, MEMORY_DIR,
+  // —— 依赖模块（透传，避免各路由模块重复 require） ——
+  fs, os, path, http, crypto, spawn,
+  // —— HTTP 基元 ——
+  sendJSON, sse, readBody,
+  // —— 运行态 ——
+  patchState, usageLog,
+  // —— Hermes CLI / SQLite ——
+  runHermes, runSessionsList, hermesEnv, active, tailStreamFile,
+  withDB, latestSessionId, maxMessageId, newMessages, buildSessionMarkdown, SESSION_ID_RE,
+  // —— 知识库 ——
+  kbListEntries, recallHits, recallContext, ollamaStatusSync,
+  // —— Ollama / 多模态 ——
+  ollamaGet, ollamaStatus, prewarmOllama, describeImage, transcribeAudio,
+  // —— 云端 provider ——
+  PROVIDER_PRESETS, loadCloudProviders, saveCloudProviders, maskKey,
+  providerHealth, healthCache, resolveModel,
+  // —— 工具箱 ——
+  scanLocalSkills, ensureSkillIndex, embedTexts, cosine,
+  // —— 用量 ——
+  recordUsage,
+};
+
+// 公开组：KB 查看器 + 只读接口（必须早于静态文件，否则 /kb 会被 serveStatic 拦成 404）
+KbRoutes.registerPublic(publicRouter, ctx);
+
+// 认证组：顺序对应原 if 链
+SessionRoutes.register(apiRouter, ctx);
+SystemRoutes.register(apiRouter, ctx);
+ProviderRoutes.register(apiRouter, ctx);
+MediaRoutes.register(apiRouter, ctx);
+KbRoutes.registerAuthed(apiRouter, ctx);   // GET /api/kb?q= 必须排在公开 KB 路由之后
+ChatRoutes.register(apiRouter, ctx);
+ToolboxRoutes.register(apiRouter, ctx);
+
+const server = http.createServer(async (req, res) => {
+  try {
+    if (await publicRouter.dispatch(req, res, ctx)) return;
+    // 静态文件无需认证（登录页要能加载）
+    if (req.method === 'GET' && !req.url.startsWith('/api/')) return serveStatic(req, res);
+    // 所有 /api/* 必须带 token
+    if (!checkAuth(req)) return sendJSON(res, 401, { error: 'unauthorized' });
+    if (await apiRouter.dispatch(req, res, ctx)) return;
+    sendJSON(res, 404, { error: 'not found' });
+  } catch (e) {
+    sendJSON(res, 500, { error: e.message });
+  }
+});
 
 server.listen(PORT, HOST, () => {
   console.log(`赫尔墨斯特工 UI → http://${HOST}:${PORT}`);
@@ -1338,4 +844,6 @@ server.listen(PORT, HOST, () => {
   } else {
     console.log(`KB 解释器：${KB_PYTHON}`);
   }
+  // P1-3: 打印路由登记数 —— 拆分后若某条路由漏登记，这一行会立刻对不上
+  console.log(`路由登记：公开 ${publicRouter.list().length} 条 / 认证 ${apiRouter.list().length} 条`);
 });
