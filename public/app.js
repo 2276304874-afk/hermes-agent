@@ -635,6 +635,18 @@
       const data = await r.json();
       const q = ($('sessSearch').value || '').trim().toLowerCase();
       sessListEl.innerHTML = '';
+      // P1-4: 「解析降级」不能静默 —— CLI 输出格式变更时后端会给 degraded 标记。
+      // 列表照常渲染（不阻断），但顶部给一条可点击重试的告警，避免被当成"本来就没有会话"。
+      if (data.degraded) {
+        const w = document.createElement('div');
+        w.className = 'sess-group';
+        w.textContent = '⚠ ' + (data.warning || '会话列表解析异常（疑似 CLI 输出格式变更）') + ' · 点击重试';
+        w.style.cursor = 'pointer';
+        w.style.color = 'var(--danger, #c0392b)';
+        w.title = '点击重新加载会话列表';
+        w.onclick = loadSessions;
+        sessListEl.appendChild(w);
+      }
       const list = (data.sessions || []).filter(s =>
         !q || String(s.title).toLowerCase().includes(q) || String(s.info).toLowerCase().includes(q) || String(s.id).includes(q)
       );
@@ -912,7 +924,8 @@
 
   async function renderMcp() {
     const r = await apiFetch('/api/mcp'); const d = await r.json();
-    tabBody.innerHTML = '<p>通过 MCP（Model Context Protocol）为 Agent 扩展外部工具。若添加/连接失败，请先在终端运行 <code>hermes setup</code> 安装 MCP 支持。</p>'
+    tabBody.innerHTML = (d.degraded ? '<p style="color:var(--danger, #c0392b);">⚠ ' + escapeHtml(d.warning || 'MCP 列表解析异常（疑似 CLI 输出格式变更）') + '</p>' : '')
+      + '<p>通过 MCP（Model Context Protocol）为 Agent 扩展外部工具。若添加/连接失败，请先在终端运行 <code>hermes setup</code> 安装 MCP 支持。</p>'
       + '<div class="toolbox-list" id="mcpList"></div>'
       + '<div class="lbl">添加服务（URL 端点，或 命令 + 参数）</div>'
       + '<div class="field-row">'
@@ -953,6 +966,7 @@
   async function renderCron() {
     const r = await apiFetch('/api/cron'); const d = await r.json();
     tabBody.innerHTML = '<p id="cronGw"></p>'
+      + (d.degraded ? '<p style="color:var(--danger, #c0392b);">⚠ ' + escapeHtml(d.warning || '定时任务列表解析异常（疑似 CLI 输出格式变更）') + '</p>' : '')
       + '<div class="toolbox-list" id="cronList"></div>'
       + '<div class="lbl">新建任务</div>'
       + '<div class="field-row">'

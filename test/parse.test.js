@@ -169,6 +169,50 @@ describe('warnIfParseEmpty', () => {
   });
 });
 
+/* -------------------------------------------------------------- parseResult */
+describe('parseResult', () => {
+  test('解析出结果 → ok，items 原样带出，无 warning', () => {
+    const log = fakeLog();
+    const items = [{ id: '20260911_173559_3e8110' }];
+    const r = P.parseResult('sessions list', 'whatever', items, log);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.items, items);
+    assert.equal(r.warning, '');
+    assert.equal(log.warns.length, 0);
+  });
+
+  test('格式变更征兆（有输出却 0 条）→ ok:false，warning 指明来源，且留下日志线索', () => {
+    const log = fakeLog();
+    const r = P.parseResult('sessions list', 'x'.repeat(80), [], log);
+    assert.equal(r.ok, false);
+    assert.equal(r.items.length, 0);
+    assert.match(r.warning, /sessions list/);
+    assert.match(r.warning, /疑似格式变更/);
+    assert.equal(log.warns.length, 1, '降级必须同时留日志，光有前端提示不够排障');
+  });
+
+  test('真实空态（No scheduled jobs.）→ 仍 ok，不得误报降级', () => {
+    const log = fakeLog();
+    const r = P.parseResult('cron list', "No scheduled jobs.\nCreate one with 'hermes cron create ...'", [], log);
+    assert.equal(r.ok, true);
+    assert.equal(r.warning, '');
+    assert.equal(log.warns.length, 0);
+  });
+
+  test('raw 恒为字符串（null/undefined 不炸），且不截断（排障要原文）', () => {
+    assert.equal(P.parseResult('x', undefined, [], fakeLog()).raw, '');
+    assert.equal(P.parseResult('x', null, [], fakeLog()).raw, '');
+    const big = 'y'.repeat(5000);
+    assert.equal(P.parseResult('x', big, [{ a: 1 }], fakeLog()).raw.length, 5000);
+  });
+
+  test('items 非数组 → 退化为空数组，并按"0 条 + 有输出"判降级', () => {
+    const r = P.parseResult('x', 'z'.repeat(60), undefined, fakeLog());
+    assert.deepEqual(r.items, []);
+    assert.equal(r.ok, false);
+  });
+});
+
 /* --------------------------------------------------------- KB 条目解析 */
 describe('KB 解析', () => {
   // 抄自 .workbuddy/kb_inbox.md 与 kb_distilled.md 的真实标题格式

@@ -8,11 +8,12 @@
  * 拆分后虽然能过语法检查，但「CSS 真加载了吗 / JS 真跑起来了吗 / 页面有没有
  * 一上来就抛错」这三件事仍然只有肉眼能验。这个脚本把它们变成可重复的断言。
  *
- * 判据分四层（缺一层都不算通过）：
+ * 判据分五层（缺一层都不算通过）：
  *   L1 传输层：/ 返回 200、/app.css 与 /app.js 可获取且 MIME 正确
  *   L2 执行层：app.js 真的执行了（window.__UI_VERSION__ 被服务端替换成数值）
  *   L3 渲染层：CSS 变量生效、关键 DOM 存在且有尺寸
  *   L4 健康层：加载与初始化期间零 pageerror、零 console.error
+ *   L5 降级层：拦截 /api/sessions 返回 degraded，告警必须出现且不阻断列表（P1-4）
  *
  * 用法：
  *   node test/ui.smoke.js [port] [token]
@@ -189,6 +190,26 @@ const CONSOLE_WHITELIST = [
     check(realConsoleErrors.length === 0, '无 console.error', realConsoleErrors.length
       ? realConsoleErrors.slice(0, 3).map(c => `${c.text} @ ${c.url || '(无 URL)'}`).join(' | ') : '');
     check(badResponses.length === 0, '无 4xx/5xx 资源请求', badResponses.length ? badResponses.slice(0, 3).join(' | ') : '');
+
+    /* ---------- L5 降级分支（P1-4） ---------- */
+    // /api/sessions 返回 degraded 时，会话列表区必须出现"疑似格式变更"告警且仍照常渲染。
+    // 正常态永远测不到这个分支（后端只在 CLI 输出格式变更时才给标记），故用路由拦截构造响应。
+    console.log('L5 降级分支');
+    await page.route('**/api/sessions', r => r.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ sessions: [], degraded: true, warning: 'sessions list 输出疑似格式变更' }),
+    }));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(1500);
+    const sessText = await page.$eval('#sessList', el => el.textContent).catch(() => '');
+    check(/疑似格式变更/.test(sessText), 'degraded 时显示解析告警', sessText.slice(0, 50));
+    check(/暂无历史会话/.test(sessText), 'degraded 不阻断列表渲染（不白屏）', '');
+    check(pageErrors.length === 0, '降级分支无 JS 运行时错误', pageErrors.length ? pageErrors.slice(0, 2).join(' | ') : '');
+    // 还原真实响应，保证下面的截图反映的是正常态
+    await page.unroute('**/api/sessions');
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(1200);
 
     /* ---------- 截图存档 ---------- */
     try {

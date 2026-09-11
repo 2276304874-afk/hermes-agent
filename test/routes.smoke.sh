@@ -88,6 +88,25 @@ else
   chk "会话历史（缺参应 400）" 400 GET "/api/history" ""
 fi
 
+# ---------- 2b. 解析降级不变量（P1-4）----------
+# 健康态下这三个「CLI 文本解析」接口不得报 degraded。一旦报，说明解析器已与
+# hermes CLI 的实际输出格式脱节（历史上表现为"功能凭空消失"），必须当天暴露。
+echo
+echo "[2b] 解析降级不变量（健康态不得 degraded）"
+chk_nodegraded() {
+  local desc="$1" path="$2" body warn
+  body="$(curl -s -m 20 -H "Authorization: Bearer ${TOKEN}" "${BASE}${path}" 2>/dev/null)"
+  if printf '%s' "${body}" | grep -q '"degraded":true'; then
+    warn="$(printf '%s' "${body}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("warning",""))' 2>/dev/null || true)"
+    bad "${desc} — 报 degraded（${warn}）"
+  else
+    ok "${desc} — 未降级"
+  fi
+}
+chk_nodegraded "会话列表解析" "/api/sessions"
+chk_nodegraded "MCP 列表解析" "/api/mcp"
+chk_nodegraded "定时任务解析" "/api/cron"
+
 # ---------- 3. 认证组 · POST（全部走参数校验，不产生副作用）----------
 echo
 echo "[3] 认证路由 · POST（参数校验路径，零副作用）"
