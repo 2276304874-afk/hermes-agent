@@ -51,40 +51,19 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
+// P1-3 拆分第一步：纯解析层抽到 lib/parse.js（零副作用、可 node:test 直测）
+const P = require('./lib/parse');
+const {
+  warnIfParseEmpty, parseSessions, parseCronList, parseMcpList, kbParseBlocks,
+} = P;
 
 const PORT = process.env.PORT || 4173;
 const HOST = process.env.HOST || '127.0.0.1';   // D4: 局域网访问设 HOST=0.0.0.0（token 认证已就位）
 const HOME = process.env.HOME;
 const WORKSPACE = process.env.HERMES_WORKSPACE || __dirname;
 // 本地知识库检索（方案乙）：自动召回历史经验，注入新会话 prompt
-/* P2-9: Python 路径运行时解析（防"版本目录改名即腐烂"，同 node 的 22.22.2-2→-3 教训）。
- * 优先级：KB_PYTHON env > 托管 versions/<最高版本>/bin/python3 > homebrew/local > 系统。
- * 硬性要求：解释器必须支持 sqlite FTS5 trigram（kb.py 索引依赖）。
- * 实测 3.13.12(3.50.4) 与 /usr/bin/python3(3.51.0) 均支持，故回退安全。 */
-function resolvePython() {
-  if (process.env.KB_PYTHON && fs.existsSync(process.env.KB_PYTHON)) return process.env.KB_PYTHON;
-  const base = path.join(HOME, '.workbuddy', 'binaries', 'python', 'versions');
-  try {
-    const cands = fs.readdirSync(base, { withFileTypes: true })
-      .filter(d => d.isDirectory() && /^\d+(\.\d+)*$/.test(d.name))
-      .map(d => d.name)
-      .filter(n => fs.existsSync(path.join(base, n, 'bin', 'python3')))
-      .sort((a, b) => {                       // 数值降序：3.13.12 应排在 3.9.6 之前
-        const A = a.split('.').map(Number), B = b.split('.').map(Number);
-        for (let i = 0; i < Math.max(A.length, B.length); i++) {
-          const d = (B[i] || 0) - (A[i] || 0);
-          if (d) return d;
-        }
-        return 0;
-      });
-    if (cands.length) return path.join(base, cands[0], 'bin', 'python3');
-  } catch (e) { /* 目录不存在 → 继续回退 */ }
-  for (const c of ['/opt/homebrew/bin/python3', '/usr/local/bin/python3', '/usr/bin/python3']) {
-    if (fs.existsSync(c)) return c;
-  }
-  return 'python3';
-}
-const KB_PYTHON = resolvePython();
+// P2-9: Python 路径运行时解析 —— 实现已移至 lib/parse.js（可单测）
+const KB_PYTHON = P.resolvePython(HOME);
 const KB_SCRIPT = path.join(WORKSPACE, 'kb', 'kb.py');
 const HERMES = `${HOME}/.hermes/venvs/hermes/bin/hermes`;
 const DB_PATH = `${HOME}/.hermes/state.db`;
@@ -362,30 +341,8 @@ function newMessages(sid, afterId) {
   ).all(sid, afterId)) || [];
 }
 
-/* P1-4: CLI 输出格式保鲜检测。
- * Hermes 升级可能改表格格式 → 正则失配 → 解析静默返回空 → 前端表现成"功能消失了"。
- * 判据：原始输出有实质内容，且不是明确的空态文案，却解析出 0 条 → 记一条告警（只告警，不改行为）。 */
-function warnIfParseEmpty(name, raw, count) {
-  if (count > 0) return;
-  const t = String(raw || '').trim();
-  if (t.length < 12) return;                                  // 空/极短 → 视为正常空态
-  if (/(no |not |none|未|暂无|empty)/i.test(t)) return;        // 明确的空态文案
-  console.warn(`[parse] ⚠ ${name} 解析出 0 条，但 CLI 输出 ${t.length} 字符 —— 疑似 Hermes 输出格式变更。原文前 200 字：${t.slice(0, 200).replace(/\n/g, ' ⏎ ')}`);
-}
+// P1-4 解析保鲜告警、P1-3 各解析函数实现均已在 lib/parse.js，顶部统一 require。
 
-// 解析 `hermes sessions list` 表格，返回 [{id,title,info}]
-function parseSessions(text) {
-  const rows = [];
-  const idRe = /^\d{8}_\d{6}_[0-9a-f]{6}$/;
-  for (const line of text.split('\n')) {
-    const tokens = line.trim().split(/\s+/);
-    if (tokens.length < 3) continue;
-    const id = tokens[tokens.length - 1];
-    if (!idRe.test(id)) continue;
-    rows.push({ id, title: tokens[0], info: tokens.slice(1, -1).join(' ') });
-  }
-  return rows;
-}
 function runSessionsList(limit = 30) {
   return new Promise((resolve) => {
     const p = spawn(HERMES, ['sessions', 'list', '--limit', String(limit)], { env: hermesEnv() });
@@ -418,26 +375,7 @@ const MEMORY_DIR = `${HOME}/.hermes/memories`;
 const MEMORY_FILE = `${MEMORY_DIR}/MEMORY.md`;
 const USER_FILE = `${MEMORY_DIR}/USER.md`;
 
-// cron list 文本解析：任务头 "  <id> [state]" + 缩进键值行
-function parseCronList(text) {
-  const jobs = [];
-  let cur = null;
-  for (const line of text.split('\n')) {
-    const h = line.match(/^\s{1,6}([0-9a-f]{6,})\s+\[(\w+)\]\s*$/);
-    if (h) { if (cur) jobs.push(cur); cur = { id: h[1], state: h[2], name: '', schedule: '', nextRun: '', deliver: '', repeat: '' }; continue; }
-    if (!cur) continue;
-    let m = line.match(/^\s*Name:\s+(.+)$/);
-    if (m) { cur.name = m[1].trim(); continue; }
-    m = line.match(/^\s*Schedule:\s+(.+)$/);
-    if (m) { cur.schedule = m[1].trim(); continue; }
-    m = line.match(/^\s*Next run:\s+(.+)$/);
-    if (m) { cur.nextRun = m[1].trim(); continue; }
-    m = line.match(/^\s*(Repeat|Deliver|Prompt):\s+(.+)$/);
-    if (m) { cur[m[1].toLowerCase()] = m[2].trim(); continue; }
-  }
-  if (cur) jobs.push(cur);
-  return jobs;
-}
+// cron list 解析（parseCronList）已在 lib/parse.js
 
 // 直扫技能目录（绕开 CLI skills list 的列宽截断，name 保真实完整）
 // 每个技能 = <SKILLS_DIR>/<name>/SKILL.md；额外读 frontmatter 的 name/description 供"点一下注入脚手架"
@@ -522,32 +460,8 @@ async function ensureSkillIndex() {
   return skillEmbedCache;
 }
 
-// skills list 表格解析（表头用 ┃ 粗线，数据行用 │ 细线，两者都要匹配）
-function parseSkillsList(text) {
-  const skills = [];
-  for (const line of text.split('\n')) {
-    if (!/[│┃]/.test(line)) continue;
-    const cells = line.split(/[│┃]/).map(c => c.trim());
-    if (cells.length >= 6 && cells[1] && cells[1] !== 'Name' && !/^[-─]+$/.test(cells[1])) {
-      skills.push({ name: cells[1], category: cells[2] || '', source: cells[3] || '', trust: cells[4] || '', status: cells[5] || '' });
-    }
-  }
-  return skills;
-}
-
-// MCP list：未配置时是提示文本；已配置时格式未知 → 同时返回原始文本兜底
-function parseMcpList(text) {
-  if (/No MCP servers configured/i.test(text)) return [];
-  const servers = [];
-  for (const line of text.split('\n')) {
-    const t = line.trim();
-    // 宽松匹配：行首为名称，后面跟 url 或 command 线索
-    if (!t || /^[┌└├─]|Gateway|MCP server|Add one/i.test(t)) continue;
-    const m = t.match(/^([A-Za-z0-9_-]+)\s{2,}(.+)$/);
-    if (m) servers.push({ name: m[1], detail: m[2].trim() });
-  }
-  return servers;
-}
+// skills list / mcp list 解析（parseSkillsList / parseMcpList）已在 lib/parse.js
+// 注：parseSkillsList 当前无调用方（技能走 scanLocalSkills 直扫目录），保留在 lib 层备查。
 
 const SESSION_ID_RE = /^\d{8}_\d{6}_[0-9a-f]{6}$/;
 
@@ -802,36 +716,17 @@ const KB_MEM_USER = path.join(HOME, '.workbuddy', 'MEMORY.md');
 
 function _readKB(p) { try { return fs.readFileSync(p, 'utf8'); } catch { return ''; } }
 
-// 镜像 kb/serve.py parse_blocks：按标题行切块为条目
-function _kbParseBlocks(text, cat, headerRe, srcGroup = 1) {
-  const out = [];
-  if (!text) return out;
-  let cur = null, buf = [];
-  for (const raw of text.split(/\r?\n/)) {
-    const line = raw.replace(/\r$/, '');
-    const m = headerRe.exec(line);
-    if (m) {
-      if (cur !== null) { cur.text = buf.join('\n').trim(); out.push(cur); }
-      cur = { cat, type: cat, src: (m[srcGroup] || '').trim(), text: '' };
-      buf = [];
-    } else if (cur !== null) {
-      buf.push(line);
-    }
-  }
-  if (cur !== null) { cur.text = buf.join('\n').trim(); out.push(cur); }
-  return out;
-}
+// 按标题行切块（原 _kbParseBlocks）实现已移至 lib/parse.js 的 kbParseBlocks（纯函数，可单测）。
 
+// 文件 IO 留在这一层；解析逻辑委托给 lib/parse.js 的 kbListFromBlocks（纯函数，可单测）
 function kbListEntries(cat = 'all') {
-  let res = [];
-  res = res.concat(_kbParseBlocks(_readKB(KB_INBOX), 'inbox', /^###\s*\[[^\]]*\]\s*(.*)/));
-  res = res.concat(_kbParseBlocks(_readKB(KB_DISTILLED), 'distilled', /^##\s*技能（源自\s*(.*)）/));
-  for (const p of [KB_MEM_PROJ, KB_MEM_USER]) {
-    const t = _readKB(p);
-    if (t) res.push({ cat: 'memory', type: '记忆', src: path.relative(WORKSPACE, p), text: t });
-  }
-  if (cat !== 'all') res = res.filter(e => e.cat === cat);
-  return res;
+  return P.kbListFromBlocks({
+    inbox: _readKB(KB_INBOX),
+    distilled: _readKB(KB_DISTILLED),
+    memoryFiles: [KB_MEM_PROJ, KB_MEM_USER]
+      .map(p => ({ src: path.relative(WORKSPACE, p), text: _readKB(p) }))
+      .filter(m => m.text),
+  }, cat);
 }
 
 // 同步探测 Ollama 在线状态（超时 2s，失败视为离线），供 /api/kb/status 使用

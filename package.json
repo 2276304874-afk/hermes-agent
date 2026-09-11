@@ -4,6 +4,8 @@
   "description": "赫尔墨斯特工 Web UI - 本地 Hermes Agent 聊天前端",
   "private": true,
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test test/*.test.js",
+    "check": "node --check server.js && node --check lib/parse.js"
   }
 }
