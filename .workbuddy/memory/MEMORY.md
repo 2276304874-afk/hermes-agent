@@ -107,6 +107,16 @@ A/B 实测(新旧均 require 真实 `lib/http.js`):旧版 `💥 unhandledRejecti
 ### 运行时心跳
 `startHeartbeat(active)`(在 `lib/maintenance.js`)在 listen 后打基线,之后每 30 分钟一行:rss / heapUsed / active(在跑子进程数),rss>800MB 告警。周期用 `HERMES_HB_MS` 覆盖(验证时调小)。`timer.unref()` 不阻止退出。**用它观察泄漏趋势,别等它变成"服务没了"。**
 
+## 解析降级信号(P1-4,2026-09-11,提交 `6867a89`)
+**问题**:各 `parse*` 遇到 CLI 输出格式变更时统一表现为「返回空数组」→ 前端只能显示「暂无历史会话」,用户分不清「真没有」还是「坏了」(历史上已因此误判两次"功能缺失")。
+**设计决策(重要,别改回去)**:
+- `lib/parse.js` 新增 `parseResult(name, raw, items, log)` → `{ok, items, raw, warning}`,内部复用 `warnIfParseEmpty` 判定。**各 `parse*` 签名保持纯数组不变**,包装层独立,既有调用方零影响。
+- 调用方需要 `raw` 才能判定 → `runSessionsList()` 返回 `{items, raw}`(不再自己吞掉原始输出)。
+- **降级用「200 + degraded 附加字段」,不用 5xx**。理由:列表必须能照常渲染,否则一个小故障会升级成"界面不可用";告警在 UI 上显式可见即可(会话列表区可点击重试的告警条 / MCP·定时任务页一行告警)。
+- 判降级必须容忍**真实空态**:`warnIfParseEmpty` 对 `No scheduled jobs.` / `No MCP servers configured.` / `暂无…` 这类文案不告警 —— 实测 mcp/cron 当前都为空但 `degraded:false`,不得误报。
+**测试网**:`parse.test.js` +5(含"真实空态不得误报降级");`routes.smoke.sh` +3「健康态不得 degraded」不变量(解析器与 CLI 格式脱节要当天暴露);`ui.smoke.js` 新增 **L5 降级层** —— 正常态永远测不到该分支,用 `page.route` 拦截 `/api/sessions` 构造 degraded 响应,断言告警出现且不白屏。
+**验证手法(值得复用)**:①最小探针 `/tmp/probe-degraded.js` —— 把 `lib/hermes` 塞进 `require.cache` 换成桩,再用假 req/res 直接调路由处理器,证明信号端到端贯穿(不启服务、零副作用);②playwright 路由拦截验前端分支。
+
 ## 知识库(KB)集成
 - 统一入口=主服务 4173:`GET /kb`(托管 `kb/viewer.html`)、`GET /api/kb/list?cat=inbox|distilled|memory|all`(**返回纯数组**)、`GET /api/kb/search?q=`(复用 recallHits)、`GET /api/kb/status`。均为公开只读(仅 127.0.0.1)。
 - 数据源:`kb_inbox.md` / `kb_distilled.md` / `~/.hermes/memories/MEMORY.md`(实测 19/23/1 = 43 条)。
@@ -117,11 +127,13 @@ A/B 实测(新旧均 require 真实 `lib/http.js`):旧版 `💥 unhandledRejecti
 - ✅ launchd 守护已装成功(state=running,RunAtLoad+KeepAlive);kickstart 可自重启。
 - ✅ KB 集成落地(viewer.html 同源化 + `/api/kb/*` + 顶栏入口 + kb-query 技能)。
 - ✅ P2-7 残留脚本归档到 `archive/one-off-fix-scripts-20260911/`;P2-8 serve.py 标弃用;P2-9 `resolvePython()` + sync.sh 动态解析 + `warnIfParseEmpty` 格式保鲜告警。
-- ✅ **git 建库完成**;**P1-6 测试基线完成**(**51 例单测** + 44 项路由冒烟 + **22 项浏览器冒烟** + **20 项健康自检**);**P1-3 四步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848) → lib/ 12 个域模块(849→141) → 前端 html/css/js 三分(1864→151)。
-  关键提交:`f5d8a7b` 建库 → `9f93aa2` 解析层 → `7f31a07` 路由表 → `6b3b0da` lib 域模块 → `a2e8c7c` 前端三分 → `cf5b03f` 备份 → `107676a` API 镜像 → `436bf0e` P0-2 加固。
+- ✅ **git 建库完成**;**P1-6 测试基线完成**(**56 例单测** + **47 项路由冒烟** + **25 项浏览器冒烟(含 L5 降级层)** + **20 项健康自检**);**P1-3 四步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848) → lib/ 12 个域模块(849→141) → 前端 html/css/js 三分(1864→151)。
+  关键提交:`f5d8a7b` 建库 → `9f93aa2` 解析层 → `7f31a07` 路由表 → `6b3b0da` lib 域模块 → `a2e8c7c` 前端三分 → `cf5b03f` 备份 → `107676a` API 镜像 → `436bf0e` P0-2 加固 → `6867a89` P1-4 解析降级信号。
 - ✅ **P0-2 已完成**(提交 `436bf0e`):根因是**兜底 catch 二次写头** → `ERR_HTTP_HEADERS_SENT` → unhandledRejection → 进程退出(A/B 实测确认,客户端表现为 `HTTP 000` = "Failed to fetch")。已封堵 + 补 `req`/`res` error 监听 + 死亡归因(`[lifecycle]`) + 运行时心跳。详见上方「崩溃归因与加固」段。
 - ✅ **全局崩溃日志已两次实战生效**:前端拆分时抓到启动期 `ReferenceError`(并行 Edit 丢更新);P0-2 加固时抓到 `startHeartbeat is not a function`(漏了 export)。两次都是"启动即崩"级别的静默故障,现在都有精确堆栈 —— 配合 `test/wiring.test.js` 已能提前在测试阶段挡住第二类。
-- ⏳ 待办:P2-10 KB 认证决策 / `parseSkillsList` 死代码待清 / 前端 `app.js` 1422 行可考虑按域再分(已有语法网 + 浏览器冒烟网兜底,比当初安全得多)。
+- ✅ **P1-4 已完成**(提交 `6867a89`):解析失效不再静默 → `degraded` 信号贯穿到前端告警。详见上方「解析降级信号」段。
+- ⏳ 待办(按优先级):**P3-12 用量日志落盘**(`usageLog` 目前仅内存 60 轮,落 `~/.hermes/usage.jsonl` 才能看长期趋势)/ **P2-10 KB 认证决策**(公开只读需写进注释与文档,消除"这是不是漏洞"的模糊地带)/ **P1-5 静默 catch 治理**(`lib/` 已无空 catch,但 `public/app.js` 仍有几处 `catch (e) {}` 需标注意图)/ **P3-11 `docs/INDEX.md` 文档索引** / 前端 `app.js` 1422 行按域再分(已有语法网 + 浏览器网兜底,可暂缓)。
+  注:`parseSkillsList` **不是死代码** —— 文件里已写明"保留作为 CLI 表格解析的备用与回归锚点,勿删",别再当待清理项。
 - ✅ **离机备份 + 异地镜像已建立**(2026-09-11):`npm run backup`(本地 bundle,可还原)+ `npm run mirror`(GitHub 私有库 `2276304874-afk/hermes-agent`)。详见上方「备份与异地镜像」段。此前"提交只存在本地 .git"的单点风险已消除。
 - 📌 **标准验收命令一次跑全**:`npm test && npm run smoke && npm run ui && npm run health`;`npm run check` 覆盖 server.js + lib/** + lib/routes/** + public/app.js + scripts/** + test/**。
 - 小隐患(未修,不紧急):`POST /api/memory/save` 的「只允许写固定路径」防御是**恒真的死代码**(`which` 三元只可能落在两个常量上),安全性没问题但注释有误导。
