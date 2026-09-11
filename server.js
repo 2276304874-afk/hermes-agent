@@ -192,4 +192,21 @@ server.listen(PORT, HOST, () => {
   console.log(`路由登记：公开 ${publicRouter.list().length} 条 / 认证 ${apiRouter.list().length} 条`);
   // P0-2: 运行时心跳（基线在此打点，之后每 30 分钟一行；HERMES_HB_MS 可覆盖）
   startHeartbeat(active);
+  // 网关后端诊断（选项 B）：服务起来即明确 gateway 是否在、key 是否配置、fail_closed 是否开，
+  // 避免"静默回退 -z"掩盖配置错误（R11 / T2）。
+  (async () => {
+    try {
+      const { gatewayEnabled, gatewayUp, gatewayKey } = require('./lib/gateway');
+      const { HOME } = require('./lib/config');
+      if (!gatewayEnabled()) { console.log('网关后端：已禁用（HERMES_USE_GATEWAY=0），仅 -z'); return; }
+      const key = gatewayKey();
+      let failClosed = 'unknown';
+      try {
+        const cfg = fs.readFileSync(`${HOME}/.hermes/config.yaml`, 'utf8');
+        failClosed = /fail_closed:\s*true/.test(cfg) ? 'true' : 'NOT true(高危!)';
+      } catch { /* 读不到配置就标 unknown */ }
+      const up = await gatewayUp();
+      console.log(`网关后端：gateway=${up ? 'up' : 'down(回退 -z)'} key=${key ? 'configured' : 'MISSING(静默回退!)'} fail_closed=${failClosed}`);
+    } catch (e) { console.log(`网关后端：诊断失败 ${e && e.message}`); }
+  })();
 });
