@@ -244,6 +244,34 @@ const CONSOLE_WHITELIST = [
         '选择器含「未归类」与「新建工作区…」', (moveProbe.opts || []).join(','));
       check(moveProbe.closed === true, '再次点击收起选择器（幂等）', String(moveProbe.closed));
     }
+
+    // 重命名能力 2026-09-12 补：此前改工作区名只能「删除再新建」，而删除会连带清掉该区
+    // 全部会话归属（会话就此散落回「未归类」）。这里守住入口存在 + 默认区受保护。
+    const renameProbe = await page.evaluate(() => {
+      const chips = Array.from(document.querySelectorAll('#wsBar .ws-chip'));
+      // 优先取「非默认」工作区：默认区那条是被锁定的分支，测不到真实删除项
+      const pickable = chips.filter(c => c.textContent && c.textContent.trim() !== '全部' && c.textContent.trim() !== '默认' && !c.classList.contains('add'));
+      const fallback = chips.filter(c => c.textContent && c.textContent.trim() !== '全部' && !c.classList.contains('add'));
+      const target = pickable[0] || fallback[0];
+      if (!target) return { skipped: true };
+      const isDefault = target.textContent.trim() === '默认';
+      target.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      const menu = document.querySelector('.ws-menu');
+      const items = menu ? Array.from(menu.querySelectorAll('.ws-menu-item')).map(b => b.textContent) : [];
+      const disabledHint = menu ? items.some(t => /默认工作区不可删除/.test(t)) : false;
+      menu && menu.remove();
+      return { skipped: false, opened: !!menu, items, disabledHint, isDefault };
+    });
+    if (renameProbe.skipped) {
+      console.log('  ⚠️ 跳过：无可操作的工作区 chip');
+    } else {
+      check(renameProbe.opened === true, '工作区右键弹出菜单', String(renameProbe.opened));
+      check((renameProbe.items || []).some(t => /重命名/.test(t)), '菜单含「重命名…」', (renameProbe.items || []).join(' / '));
+      // 默认区：删除项必须是"不可删"提示；普通区：必须是真删除项
+      const expectLocked = renameProbe.isDefault === true;
+      check(expectLocked ? renameProbe.disabledHint : (renameProbe.items || []).some(t => /^删除工作区/.test(t)),
+        expectLocked ? '默认区显示为「不可删除」（受保护）' : '普通工作区显示真实删除项', (renameProbe.items || []).join(' / '));
+    }
     check(pageErrors.length === 0, '工作区入口交互无 JS 运行时错误', pageErrors.length ? pageErrors.slice(0, 2).join(' | ') : '');
 
     /* ---------- L6 KB 查看器（P2-10 认证 + 返回形状归一） ---------- */

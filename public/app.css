@@ -354,12 +354,17 @@
   .composer.hero-mode .hint { display: none; }
   /* ---------- dsh 式工作区模块（2026-09-12） ---------- */
   /* 侧栏工作区 chips：幽灵 pill，选中 = 主文字反色（dsh 语言：选中态不染色） */
-  .ws-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 12px 2px; flex-shrink: 0; }
+  .ws-bar { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 12px 2px; flex-shrink: 0; position: relative; }
   .ws-chip { background: transparent; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; font-size: 12px; cursor: pointer; transition: background .15s, color .15s; max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ws-chip:hover { background: var(--hover-tint); color: var(--text); }
   .ws-chip.on { background: var(--text); color: var(--bg); border-color: var(--text); font-weight: 500; }
   .ws-chip.add { border-style: dashed; color: var(--text-faint); padding: 4px 9px; }
   .ws-chip.add:hover { color: var(--text); }
+  /* 工作区右键菜单：绝对定位在 chip 条下方，不用浮层库 */
+  .ws-menu { position: absolute; z-index: 40; margin-top: 4px; min-width: 150px; background: var(--bg-elev, var(--bg)); border: 1px solid var(--border); border-radius: 9px; padding: 4px; box-shadow: 0 8px 24px rgba(0,0,0,.28); display: flex; flex-direction: column; gap: 2px; }
+  .ws-menu-item { background: transparent; border: 0; color: var(--text); text-align: left; font-size: 12.5px; padding: 7px 10px; border-radius: 6px; cursor: pointer; white-space: nowrap; }
+  .ws-menu-item:hover { background: var(--hover-tint); }
+  .ws-menu-item.danger { color: var(--danger); }
   /* 会话项内的工作区徽标 */
   .ws-tag { font-size: 10px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 5px; padding: 0 5px; margin-right: 2px; }
   /* 会话项「移动到工作区」就地选择器：绝对定位覆在动作行上，不挤动列表高度 */

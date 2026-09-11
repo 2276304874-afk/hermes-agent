@@ -167,6 +167,7 @@ UI 启动时还会打 `[gateway] 初始探活：…`，之后每 30s 探活**仅
 | 文件 | 职责 |
 |---|---|
 | `lib/gateway.js` | gateway 客户端：key 解析、探活、看护、SSE 解析、建会话 |
+| `lib/workspace.js` + `lib/routes/workspace.js` | 工作区元数据：列表/新建/**重命名**/删除/会话归属 |
 | `lib/routes/chat.js` | 两条后端（-z / gateway）的编排与 `/api/stop` |
 | `lib/safety.js` | 会话级危险放行文件读写（秒级 TTL） |
 | `test/gateway.test.js` | SSE 解析 + key 提取单测（20 项，不联网） |

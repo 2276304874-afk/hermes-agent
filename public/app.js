@@ -739,6 +739,51 @@
     sel.focus();
   }
 
+  /* 工作区右键菜单：重命名 / 删除。
+   * 删除前必须报清挂载数量——默认区之外的删除会连带清掉该区全部会话归属，
+   * 一次点错就是一批会话散落回「未归类」且不可撤销（无回收站）。 */
+  function wsContextMenu(name, anchorEl) {
+    const owned = Object.keys(wsAssign).filter(k => wsAssign[k] === name);
+    const tip = owned.length ? `（含 ${owned.length} 个会话，删除后它们将回到「未归类」）` : '（无会话）';
+    const menu = document.createElement('div');
+    menu.className = 'ws-menu';
+    const item = (text, danger, fn) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.className = 'ws-menu-item' + (danger ? ' danger' : ''); b.textContent = text;
+      b.onclick = (e) => { e.stopPropagation(); menu.remove(); fn(); };
+      menu.appendChild(b);
+    };
+    item('重命名…', false, async () => {
+      const to = prompt(`重命名工作区「${name}」（保留 ${owned.length} 个会话归属）：`, name);
+      if (to == null) return;
+      try {
+        const r = await apiFetch('/api/workspace/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from: name, to: to.trim().slice(0, 40) }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('重命名失败: ' + (d.error || r.status)); return; }
+        await loadWorkspaces();                       // 归属整体迁移，必须用服务端返回值重建本地映射
+        if (activeWs === name) activeWs = (to.trim().slice(0, 40)) || '';
+        renderWsBar(); loadSessions(); refreshHeroCtx();
+      } catch (e) { alert('重命名失败: ' + e.message); }
+    });
+    const locked = name === '默认';
+    item(locked ? '默认工作区不可删除' : '删除工作区…', !locked, async () => {
+      if (locked) { alert('默认工作区不可删除（它是存储缺失时的回落锚点）。'); return; }
+      if (!confirm(`删除工作区「${name}」？\n${tip}\n此操作不可恢复。`)) return;
+      try {
+        const r = await apiFetch('/api/workspace/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('删除失败: ' + (d.error || r.status)); return; }
+        if (activeWs === name) activeWs = '';
+        await loadWorkspaces(); renderWsBar(); loadSessions(); refreshHeroCtx();
+      } catch (e) { alert('删除失败: ' + e.message); }
+    });
+    const close = (e) => {
+      if (!menu.contains(e.target) && e.target !== anchorEl) { dropNode(menu); document.removeEventListener('pointerdown', close); }
+    };
+    document.addEventListener('pointerdown', close);
+    anchorEl.parentNode.appendChild(menu);
+  }
+
   function renderWsBar() {
     const bar = $('wsBar');
     if (!bar) return;
@@ -747,6 +792,11 @@
       const c = document.createElement('button');
       c.type = 'button'; c.className = 'ws-chip' + (cls ? ' ' + cls : '') + (activeWs === val ? ' on' : '');
       c.textContent = label;
+      // 右键（或长按）才出改名/删除：放在左键会让"切换工作区"这种高频操作变得危险。
+      if (cls !== 'add' && val) {
+        c.title = '右键：重命名 / 删除';
+        c.oncontextmenu = (e) => { e.preventDefault(); wsContextMenu(val, c); };
+      }
       c.onclick = async () => {
         if (cls === 'add') {
           const name = prompt('新工作区名称（1-40 字）：', '');
