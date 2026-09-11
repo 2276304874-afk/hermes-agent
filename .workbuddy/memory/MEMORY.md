@@ -18,8 +18,22 @@
 - ⛔ 绝不把后端切 `hermes serve`:不注册安全 hook=静默关高危拦截。只用 gateway run / -z。
 - api_server 调用**只留在 Node 端**,浏览器不得直连 :8642(CORS origin-gated:无 Origin 放行 / 跨站 403)。
 
+## 服务现状(2026-09-12 02:00 实测)
+- `com.hermes-agent.ui` 与 `com.hermes-agent.gateway` **均已 launchd 注册且 running**(此前"gateway 未注册"的待办已解决):UI pid→4173、gateway pid 2971→8642,均与端口监听一致。Ollama 11434 在跑,模型常驻。
+- 测试基线(全绿):`npm test` **101** / `smoke` **51** / `ui` **38** / `health` **21** / `test:safety` **6** / `stop.smoke` **9** / `test:chat` **6**。
+
+## 性能基线(2026-09-12 02:00,`/api/usage` summary)
+- **avgFirstTokenSec24h ≈ 45.25s**(最大体验痛点)· avgTokPerSec 17.5 · avgElapsed 28.5s · 18 轮全本地 · toolCallsTotal 仅 3。
+- 模型**常驻**(hermes-local-gemma4 3.1GB,expires ~2h)→ **45s 不是推理冷加载**,延迟来自 Hermes agent 侧(createSession / 工具注册 / gateway 编排),需专门打点定位。
+
+## 功能完备性盘点(2026-09-12)
+- **多模态已闭环**(勿重复列为缺口):`/api/vision`(base64 图)/`/api/transcribe`(前端重采样 16k WAV)/`/api/upload`(JSON `{name,data:base64}`,非 multipart!)/`/api/suggest` 均接线可用,已 curl 实测通过。入口:`#imgBtn`/`#fileBtn`/`#micBtn`。
+- **工作区模块已闭环**:list/create/**rename**/delete/assign + 会话侧 📁 移动选择器。
+- ⚠️ **模式开关「快速/思考」是纯 UI 折叠**,`chatMode` 只控制 `.reason` 展开与否,**不下传给模型**(刻意如此:关 CoT 会让小模型只说不做)。存在语义误导风险——需要产品决策而非顺手接线。
+
 ## 代码结构与工程化
 - git on `main`。`.gitignore` 忽略 kb.db/kb_*_state.json 等;**kb_inbox.md/kb_distilled.md/memory/ 必须入库**。
+- ⚠️ **无远端 tracking 分支**(`git rev-list --left-right origin/main...main` 失败)。`npm run mirror`(REST API,因本机 github.com:443 被阻断)/`npm run backup`(本地 bundle)均**未纳入常规流程**,有单点丢失风险。
 - `lib/` 域模块:config(单一真源,`WORKSPACE=path.resolve(__dirname,'..')`)/state(单例,**禁 new Map**)/http/auth/db/hermes/ollama/cloud/knowledge/skills/maintenance/parse/router/gateway/safety/usage。`lib/routes/*` 39 端点。KB 检索逻辑=`lib/knowledge.js`(非 kb.js)。
 - 前端三不变量:①head 内联主题+版本戳(不可外移);②`/app.js` 在 body 末不加 defer/async;③不改 ES module。`npm run check` 覆盖全部。
 - **测试五步曲**:`npm test`(69)/`npm run smoke`(51 路由)/`npm run ui`(浏览器 30)/`npm run health`(21),全绿后 `git commit`。⚠️ 本机 `node --test` 须写 `node --test test/*.test.js`(目录被当模块路径)。
