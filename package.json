@@ -9,6 +9,9 @@
     "smoke": "bash test/routes.smoke.sh",
     "ui": "node test/ui.smoke.js 4173 \"$(cat $HOME/.hermes/ui_token 2>/dev/null)\"",
     "health": "bash healthcheck.sh",
-    "check": "for f in server.js lib/*.js lib/routes/*.js public/app.js; do node --check \"$f\" || exit 1; done"
+    "backup": "bash backup.sh",
+    "mirror": "node scripts/push-via-api.js main",
+    "mirror:dry": "node scripts/push-via-api.js main --dry-run",
+    "check": "for f in server.js lib/*.js lib/routes/*.js public/app.js scripts/*.js; do node --check \"$f\" || exit 1; done"
   }
 }
