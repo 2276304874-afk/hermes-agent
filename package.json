@@ -8,6 +8,7 @@
     "test": "node --test test/*.test.js",
     "test:safety": "python3 test/safety.test.py",
     "test:chat": "node test/chat.gateway.smoke.js",
+    "test:stop": "node test/stop.smoke.js 4173 \"$(cat $HOME/.hermes/ui_token 2>/dev/null)\"",
     "smoke": "bash test/routes.smoke.sh",
     "ui": "node test/ui.smoke.js 4173 \"$(cat $HOME/.hermes/ui_token 2>/dev/null)\"",
     "health": "bash healthcheck.sh",

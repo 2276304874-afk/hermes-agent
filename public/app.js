@@ -628,9 +628,11 @@
     const wsTag = wsAssign[s.id] ? '<span class="ws-tag">📁 ' + escapeHtml(wsAssign[s.id]) + '</span> ' : '';
     el.innerHTML = '<div class="t">' + escapeHtml(s.title) + '</div><div class="m">' + wsTag + escapeHtml(s.info) + '</div>'
       + '<div class="sess-actions">'
+      + '<button type="button" data-act="move" title="移动到工作区"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l1.8 2.2h7A1.5 1.5 0 0 1 19 9.7v8.3a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 18z"/></svg></button>'
       + '<button type="button" data-act="rename" title="重命名"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18.2 3.3a2.1 2.1 0 0 1 3 3L13 14.5l-4 1 1-4z"/><path d="M19.5 14.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h4.5"/></svg></button>'
       + '<button type="button" data-act="export" title="导出 Markdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><polyline points="7.5,10 12,14.5 16.5,10"/><path d="M4 16.5V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2.5"/></svg></button>'
       + '<button type="button" data-act="del" class="del" title="删除会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v1.5"/><path d="M6.5 6.5l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12"/><line x1="10" y1="10.5" x2="10" y2="16.5"/><line x1="14" y1="10.5" x2="14" y2="16.5"/></svg></button></div>';
+    el.querySelector('[data-act="move"]').onclick = (e) => { e.stopPropagation(); openWsPicker(el, s.id); };
     el.querySelector('[data-act="rename"]').onclick = (e) => { e.stopPropagation(); renameSession(s.id, s.title); };
     el.querySelector('[data-act="export"]').onclick = (e) => { e.stopPropagation(); exportSession(s.id); };
     el.querySelector('[data-act="del"]').onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
@@ -674,6 +676,69 @@
       renderWsBar();
     } catch (e) { softFail('拉取工作区', e); }
   }
+  /* 新建工作区（侧栏 ＋ 与会话移动共用）。成功后刷新列表并按需把某会话归进去。 */
+  async function createWorkspace(name, assignToId) {
+    const n = String(name || '').trim().slice(0, 40);
+    if (!n) return false;
+    try {
+      const r = await apiFetch('/api/workspace/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: n }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('创建失败: ' + (d.error || r.status)); return false; }
+      await loadWorkspaces();
+      if (assignToId) await assignWorkspace(assignToId, n);
+      return true;
+    } catch (e) { alert('创建失败: ' + e.message); return false; }
+  }
+
+  /* 会话归属变更。workspace 传空串 = 移出工作区（归入「未归类」）。 */
+  async function assignWorkspace(sid, name) {
+    try {
+      const r = await apiFetch('/api/workspace/assign', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: sid, workspace: name || '' }) });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('移动失败: ' + (d.error || r.status)); return; }
+      await loadWorkspaces();
+      loadSessions();
+      if (sid === sessionId) setConvMeta(name || '');   // 顶栏归属徽标同步
+    } catch (e) { alert('移动失败: ' + e.message); }
+  }
+
+  /* 会话项上的轻量归属选择器：点 📁 就地展开一个 select，选中即写接口、选完自收。
+   * 不用 prompt 手打名字——已有工作区必须能一键选，手打必然拼出不一致的同名鲁鱼。 */
+  /* 移除节点前必须确认它还在 DOM 里：blur 与其它路径可能已经把它摘掉，
+   * 二次 remove 会抛 NotFoundError（即便 try 吃掉，也不该靠异常做控制流）。 */
+  function dropNode(n) { try { if (n && n.parentNode) n.remove(); } catch { /* 已移除 */ } }
+
+  function openWsPicker(anchorEl, sid) {
+    const existing = anchorEl.querySelector('.ws-picker');
+    if (existing) { dropNode(existing); return; }         // 再点一次收起
+    const cur = wsAssign[sid] || '';
+    const sel = document.createElement('select');
+    sel.className = 'ws-picker';
+    const mkOpt = (v, label) => { const o = document.createElement('option'); o.value = v; o.textContent = label; if (v === cur) o.selected = true; sel.appendChild(o); };
+    mkOpt('', '未归类');
+    for (const w of wsList) mkOpt(w, '📁 ' + w);
+    mkOpt('__new__', '＋ 新建工作区…');
+    let busy = false;
+    const commit = async () => {
+      if (busy) return; busy = true;
+      const v = sel.value;
+      dropNode(sel);
+      try {
+        if (v === '__new__') {
+          const n = prompt('新工作区名称（1-40 字）：', '');
+          if (n && n.trim()) await createWorkspace(n, sid);
+          return;
+        }
+        if (v !== cur) await assignWorkspace(sid, v);
+      } finally { busy = false; }
+    };
+    sel.onchange = commit;
+    sel.onblur = () => dropNode(sel);
+    sel.onclick = (e) => e.stopPropagation();           // 别让点击冒泡成"打开会话"
+    anchorEl.appendChild(sel);
+    sel.focus();
+  }
+
   function renderWsBar() {
     const bar = $('wsBar');
     if (!bar) return;
@@ -686,13 +751,9 @@
         if (cls === 'add') {
           const name = prompt('新工作区名称（1-40 字）：', '');
           if (!name || !name.trim()) return;
-          try {
-            const r = await apiFetch('/api/workspace/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
-            const d = await r.json().catch(() => ({}));
-            if (!r.ok) { alert('创建失败: ' + (d.error || r.status)); return; }
-            if (Array.isArray(d.workspaces)) wsList = d.workspaces;
-            activeWs = name.trim().slice(0, 40);
-          } catch (e) { alert('创建失败: ' + e.message); return; }
+          // 复用 createWorkspace：侧栏与「移动到工作区」必须走同一条创建路径，否则两处行为会漂移
+          const okNew = await createWorkspace(name.trim());
+          if (okNew) activeWs = name.trim().slice(0, 40);
         } else {
           activeWs = (activeWs === val) ? '' : val;   // 再点一次取消（回「全部」）
         }

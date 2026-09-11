@@ -211,4 +211,11 @@ server.listen(PORT, HOST, () => {
       console.log(`网关后端：gateway=${up ? 'up' : 'down(回退 -z)'} key=${key ? 'configured' : 'MISSING(静默回退!)'} fail_closed=${failClosed}`);
     } catch (e) { console.log(`网关后端：诊断失败 ${e && e.message}`); }
   })();
+  // T6: gateway 状态看护 —— 每 30s 探活，仅在状态跃迁时落一行日志。
+  // 存在意义：gateway 掉线时 UI 会悄悄降级成 -z（慢但能用），没有这行日志，
+  // 使用者只会觉得"最近怎么变慢了"，无从归因。它不负责拉起 gateway（那是 launchd 的活）。
+  try {
+    const { startWatchdog } = require('./lib/gateway');
+    startWatchdog();
+  } catch (e) { console.log(`网关看护：启动失败 ${e && e.message}`); }
 });

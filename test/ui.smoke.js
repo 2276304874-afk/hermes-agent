@@ -212,6 +212,40 @@ const CONSOLE_WHITELIST = [
     await page.reload({ waitUntil: 'load' });
     await page.waitForTimeout(1200);
 
+    /* ---------- L5b 工作区「移动到」入口 ---------- */
+    // 会话项上的「移动到工作区」入口是 2026-09-12 补的：会话归入工作区只有「新建时归类」一条路，
+    // 已有会话无法搬迁。它有三个容易回归又肉眼难以发现的点：
+    //   ① 按钮没渲染出来（innerHTML 拼接错一处就整个动作行消失）；
+    //   ② 点了没冒出选择器（openWsPicker 未定义 → 只有一条 pageerror，界面毫无反馈）；
+    //   ③ 选完不刷新列表（assign 成功但 loadSessions 没重跑，看起来像没生效）。
+    // 故在此固化。本机无会话时跳过并标注，不因环境差异虚报。
+    console.log('L5b 工作区移动入口');
+    const moveProbe = await page.evaluate(() => {
+      const item = document.querySelector('.sess-item');
+      if (!item) return { skipped: true };
+      const btn = item.querySelector('[data-act="move"]');
+      if (!btn) return { noButton: true };
+      btn.click();
+      const sel1 = item.querySelector('.ws-picker');
+      const opened = !!sel1;
+      const opts = sel1 ? Array.from(sel1.options).map(o => o.value) : [];
+      btn.click();                                  // 再点一次应收起
+      const closed = !item.querySelector('.ws-picker');
+      // 二次点击已在 UI 内部把它摘掉，此处必须先判 parentNode（否则 evaluate 里抛 NotFoundError）
+      if (sel1 && sel1.parentNode) sel1.remove();
+      return { skipped: false, opened, closed, opts };
+    });
+    if (moveProbe.skipped) {
+      console.log('  ⚠️ 跳过：本机无历史会话，无法验证移动入口');
+    } else {
+      check(!moveProbe.noButton, '会话项渲染出「移动到工作区」按钮', moveProbe.noButton ? '未找到 data-act="move"' : '');
+      check(moveProbe.opened === true, '点击弹出工作区选择器', String(moveProbe.opened));
+      check((moveProbe.opts || []).includes('') && (moveProbe.opts || []).includes('__new__'),
+        '选择器含「未归类」与「新建工作区…」', (moveProbe.opts || []).join(','));
+      check(moveProbe.closed === true, '再次点击收起选择器（幂等）', String(moveProbe.closed));
+    }
+    check(pageErrors.length === 0, '工作区入口交互无 JS 运行时错误', pageErrors.length ? pageErrors.slice(0, 2).join(' | ') : '');
+
     /* ---------- L6 KB 查看器（P2-10 认证 + 返回形状归一） ---------- */
     // 两件「页面打得开、但功能其实是空的」的故障，肉眼极难发现，故固化进冒烟网：
     //   ① KB 接口已移入认证闸门 → /kb 页面不带令牌时全是 401（页面本身仍 200，只是空）；

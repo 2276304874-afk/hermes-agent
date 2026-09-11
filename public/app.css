@@ -362,6 +362,10 @@
   .ws-chip.add:hover { color: var(--text); }
   /* 会话项内的工作区徽标 */
   .ws-tag { font-size: 10px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); border-radius: 5px; padding: 0 5px; margin-right: 2px; }
+  /* 会话项「移动到工作区」就地选择器：绝对定位覆在动作行上，不挤动列表高度 */
+  .ws-picker { position: absolute; right: 6px; top: 5px; z-index: 5; background: var(--bg-elev, var(--bg)); color: var(--text); border: 1px solid var(--accent); border-radius: 7px; font-size: 12px; padding: 3px 4px; max-width: calc(100% - 12px); cursor: pointer; }
+  .ws-picker:focus { outline: none; }
+  .ws-picker option { background: var(--bg); color: var(--text); }
   /* Hero 上下文行：工作区选择（ghost chip 形态的 select，dsh 输入卡上方同位） */
   .hero-ctx { display: flex; gap: 8px; }
   .hero-ctx select { background: transparent; color: var(--text-dim); border: 1px solid var(--border); border-radius: 999px; padding: 6px 14px; font-size: 12.5px; cursor: pointer; min-width: 130px; text-align: center; }
