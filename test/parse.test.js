@@ -56,6 +56,45 @@ describe('parseSessions', () => {
     assert.equal(P.parseSessions('标题 ws 1h ago 2026091_173559_3e8110').length, 0, '日期少一位不合法');
     assert.equal(P.parseSessions('标题 ws 1h ago 20260911_173559_3e8110').length, 1);
   });
+
+  /* ---- 2026-09-12 修的回归：gateway 成为默认后端后，会话 ID 从
+   *      YYYYMMDD_HHMMSS_xxxxxx 变成 api_<10位>_<8位hex>，而当时的正则只认前者，
+   *      结果列表里全是 gateway 会话 → 解析出 0 条 → /api/sessions 返回 degraded。 ---- */
+  test('[回归] gateway 会话 ID（api_<时间戳>_<hex>）必须能解析', () => {
+    const raw = [
+      'Title                            Preview                                  Last Active   ID',
+      '─'.repeat(120),
+      '只回复两个字：你好 #b8e8f637              [自动召回的相关历史经验]  - (项目日志 / 18:10   7m ago        api_1789152458_78429320',
+      '简单问候回复                           只回复两个字：你好                                36m ago       api-278230a76156998c',
+    ].join('\n');
+    const rows = P.parseSessions(raw);
+    assert.equal(rows.length, 2, '两种 gateway ID 形态都要认');
+    assert.equal(rows[0].id, 'api_1789152458_78429320');
+    assert.equal(rows[1].id, 'api-278230a76156998c');
+    // 标题内含空格，必须整段保留 —— 否则列表里会出现一堆看似同名的项
+    assert.equal(rows[0].title, '只回复两个字：你好 #b8e8f637');
+  });
+
+  test('[回归] 纯 gateway 会话列表不得被判为 degraded（原有 Bug 症状）', () => {
+    const raw = [
+      'Title                            Preview                                  Last Active   ID',
+      '─'.repeat(120),
+      '你好 #b8e8f637                        预览文本                                  7m ago        api_1789152458_78429320',
+      '你好 #e8d0b003                        预览文本                                  8m ago        api_1789152447_ec291bb3',
+    ].join('\n');
+    const rows = P.parseSessions(raw);
+    assert.equal(rows.length, 2, '不得退化成 0 条（0 条会被上层判为 degraded）');
+    assert.ok(rows[0].title !== rows[1].title, '带 #runId 后缀的标题必须能区分');
+  });
+
+  test('列间距用多空格分隔时被正确切列；单空格输入仍能降级解析', () => {
+    // 定宽表格：列之间是 >=2 个空格，正文内部是单空格
+    const wide = '中文标题 含空格      预览信息        7m ago        api_1789152458_78429320';
+    assert.equal(P.parseSessions(wide)[0].title, '中文标题 含空格');
+    // 非定宽（CLI 形态又变）→ 走分词兜底，不能返回空
+    const narrow = '标题 ws 1h ago api_1789152458_78429320';
+    assert.equal(P.parseSessions(narrow).length, 1, '兜底路径必须仍能解析出条目');
+  });
 });
 
 /* -------------------------------------------------------------- cron list */
