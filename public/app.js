@@ -632,6 +632,7 @@
     el.querySelector('[data-act="del"]').onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
     el.onclick = async () => {
       sessionId = s.id; currentRunId = null; currentRunEl = null;
+      setConvTitle(s.title, true);   // 会话视图顶栏：载入历史会话时显示其标题
       if (isMobile()) setSideDrawer(false);   // 手机上选中会话后收起抽屉
       messagesEl.innerHTML = '';
       const note = document.createElement('div'); note.className = 'sysnote';
@@ -1378,6 +1379,8 @@
     if (img) { pendingImg = null; renderImgPreview(); }
     if (pf) { pendingFile = null; renderFilePreview(); }
     lastPrompt = prompt;
+    // 会话视图顶栏：新会话首轮即以本条指令为标题（gateway 侧标题同源取自 prompt）
+    if (!sessionId) setConvTitle(prompt || (img ? '图片对话' : '新会话'), true);
     const es0 = messagesEl.querySelector('.empty-state'); if (es0) es0.remove();   // 首条消息前移除空态磁贴
     if (promptOverride == null) {
       addUserMsg(prompt || (img ? '📷 附图' : '📄 附文件'), img ? img.dataUrl : null);
@@ -1448,7 +1451,15 @@
     messagesEl.appendChild(es);
   }
 
-  function newChat() { sessionId = null; currentRunId = null; currentRunEl = null; messagesEl.innerHTML = ''; renderEmptyState(); updateHint(); loadSessions(); }
+  // 会话视图顶栏：显示/隐藏 + 设标题（t 为 null 时只切换可见性）
+  function setConvTitle(t, show) {
+    const head = $('convHead'), el = $('convTitle');
+    if (!head || !el) return;
+    if (t != null) el.textContent = t || '新会话';
+    head.style.display = show ? '' : 'none';
+  }
+
+  function newChat() { sessionId = null; currentRunId = null; currentRunEl = null; messagesEl.innerHTML = ''; renderEmptyState(); setConvTitle('新会话', false); updateHint(); loadSessions(); }
 
   sendBtn.onclick = () => send();
   $('newChat').onclick = newChat;

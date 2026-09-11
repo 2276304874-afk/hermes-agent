@@ -154,10 +154,22 @@
   .run-dot { color: var(--text-dim); font-style: italic; }
   .run-dot::after { content: ""; animation: dots 1.4s steps(4, end) infinite; }
   .composer { border-top: 1px solid var(--border); padding: 14px 20px; background: var(--bg-soft); }
-  .composer .box { max-width: 880px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
-  textarea { flex: 1; resize: none; background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 10px; padding: 11px 13px; font-size: 14px; font-family: inherit; max-height: 160px; line-height: 1.5; }
-  textarea:focus { outline: none; border-color: var(--accent); }
-  .send-btn { background: var(--accent); color: #fff; border: none; border-radius: 50%; width: 44px; height: 44px; padding: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+  /* 工作台改版第二步：一体化输入卡 —— textarea 在上、工具行在下（附件/模式/模型/发送全在卡内） */
+  .composer .box { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; gap: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 16px; padding: 10px 12px; transition: border-color .15s; }
+  .composer .box:focus-within { border-color: var(--accent); }
+  textarea { flex: 1; resize: none; background: transparent; color: var(--text); border: none; padding: 4px 6px; font-size: 14px; font-family: inherit; max-height: 160px; line-height: 1.5; }
+  textarea:focus { outline: none; }
+  .box-bar { display: flex; align-items: center; gap: 8px; }
+  .box-bar .spacer { flex: 1; }
+  /* 卡内图标按钮：幽灵态（透明底、无边框），悬停显边 */
+  .box-bar .mic-btn { width: 36px; height: 36px; background: transparent; border-color: transparent; }
+  .box-bar .mic-btn:hover { border-color: var(--border); }
+  .box-bar .mic-btn.on { background: var(--danger); border-color: var(--danger); }
+  /* 卡内模型选择：文字态（贴工作台风格），悬停加深 */
+  .box-bar select { background: transparent; color: var(--text-dim); border: 1px solid transparent; border-radius: 8px; padding: 6px 4px; font-size: 12.5px; cursor: pointer; max-width: 240px; }
+  .box-bar select:hover { color: var(--text); border-color: var(--border); }
+  .box-bar select:focus { outline: none; border-color: var(--accent); color: var(--text); }
+  .send-btn { background: var(--accent); color: #fff; border: none; border-radius: 50%; width: 40px; height: 40px; padding: 0; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
   .send-btn svg { width: 20px; height: 20px; }
   .send-btn:disabled { opacity: .5; cursor: not-allowed; }
   .send-btn.cancel { background: var(--danger); }
@@ -265,9 +277,10 @@
     .logo small { display: none; }
     #newChat { padding: 6px 8px; margin-left: auto; }
     .hd-tools { display: flex; order: 1; flex: 1 1 100%; align-items: center; gap: 8px; }
-    /* 模式/模型选择已移入 composer 工具行，移动端跟随输入框布局 */
-    .composer-bar { padding: 0 2px; }
-    .composer-bar select { flex: 1; min-width: 0; max-width: none; }
+    /* 一体化输入卡：移动端工具行收紧（允许换行、模型选择占满剩余宽度） */
+    .box-bar { flex-wrap: wrap; row-gap: 4px; }
+    .box-bar select { flex: 1; min-width: 0; max-width: none; }
+    .conv-head { padding: 8px 12px 0; }
     .seg button { padding: 6px 8px; }
     /* 豆包式助手回答：去头像，全宽大卡片；用户气泡保持右侧 */
     .msg.bot .avatar { display: none; }
@@ -312,9 +325,7 @@
   .side-link { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; color: var(--text-dim); font-size: 11.5px; cursor: pointer; padding: 2px 0; }
   .side-link svg { width: 13px; height: 13px; }
   .side-link:hover { color: var(--text); }
-  /* composer 工具行：左=对话模式切换，右=模型选择（对齐工作台式输入框） */
-  .composer-bar { max-width: 880px; margin: 8px auto 0; display: flex; align-items: center; gap: 10px; }
-  .composer-bar .spacer { flex: 1; }
-  .composer-bar select { background: var(--bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 6px 10px; font-size: 12.5px; cursor: pointer; max-width: 260px; }
-  .composer-bar select:hover { border-color: var(--accent); }
-  .composer-bar select:focus { outline: none; border-color: var(--accent); }
+  /* 会话视图顶栏：当前会话标题（工作台改版第二步，新会话空态时隐藏） */
+  .conv-head { max-width: 880px; width: 100%; margin: 0 auto; padding: 10px 20px 0; display: flex; align-items: baseline; gap: 10px; flex-shrink: 0; }
+  .conv-head .conv-title { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 70%; }
+  .conv-head .conv-meta { margin-left: auto; font-size: 11.5px; color: var(--text-dim); white-space: nowrap; }

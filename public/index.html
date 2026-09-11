@@ -7,7 +7,8 @@
     2. <body> 静态骨架：
        header（侧栏开关/标题/主题/工具箱/设置/知识库/新对话）
        layout = aside 侧栏(新会话按钮+历史会话搜索+分组+状态底栏[模型状态/用量/设置])
-                + main(消息流[空态=Hero 引导页] + composer 输入条[输入行+工具行:模式/模型])
+                + main(会话标题顶栏#convHead[空态时隐藏] + 消息流[空态=Hero 引导页]
+                       + composer 一体化输入卡[textarea 上+工具行下:附件/模式/模型/发送])
        + 各模态框：登录(令牌) / 危险操作审批 / 云端API设置 / L5工具箱(MCP·定时·技能·记忆)
     3. <script> ① head：主题初始化（防闪烁）+ 页面版本戳（配合浏览器缓存提示条）
               ② body 末尾主脚本：Token 认证 → SSE 聊天主循环(send/handleFrame)
@@ -66,24 +67,27 @@
     </aside>
     <button id="backdrop" type="button" aria-label="关闭侧栏"></button>
     <main>
+      <div class="conv-head" id="convHead" style="display:none">
+        <div class="conv-title" id="convTitle">新会话</div>
+      </div>
       <div class="messages" id="messages"></div>
       <div class="composer">
         <div class="box">
-          <button class="mic-btn" id="imgBtn" title="上传图片（gemma4 识别，OCR / 问 bug）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.7" cy="9.7" r="1.5"/><path d="m3.5 17 4.7-4.7a1.5 1.5 0 0 1 2.1 0l6.2 6.2"/><path d="m14.5 16.5 2.4-2.4a1.5 1.5 0 0 1 2.1 0l2.4 2.4"/></svg></button>
-          <input type="file" id="imgInput" accept="image/*" style="display:none" />
-          <button class="mic-btn" id="fileBtn" title="上传文件（小文本直读；PDF/大文件存盘后交给 Hermes 读取）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="12.5" y2="17"/></svg></button>
-          <input type="file" id="fileInput" style="display:none" />
-          <button class="mic-btn" id="micBtn" title="语音输入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.8" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="18" x2="12" y2="21.2"/></svg></button>
-          <textarea id="input" rows="1" placeholder="给赫尔墨斯下达指令… (Enter 发送, Shift+Enter 换行)"></textarea>
-          <button class="send-btn" id="sendBtn" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5.5"/><polyline points="6.5,11 12,5.5 17.5,11"/></svg></button>
-        </div>
-        <div class="composer-bar">
-          <div class="seg" id="modeSeg" title="对话模式：思考=展示深度思考过程，快速=跳过">
-            <button type="button" data-mode="fast">快速</button>
-            <button type="button" data-mode="think" class="on">思考</button>
+          <textarea id="input" rows="2" placeholder="给赫尔墨斯下达指令… (Enter 发送, Shift+Enter 换行)"></textarea>
+          <div class="box-bar">
+            <button class="mic-btn" id="imgBtn" title="上传图片（gemma4 识别，OCR / 问 bug）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2.5"/><circle cx="8.7" cy="9.7" r="1.5"/><path d="m3.5 17 4.7-4.7a1.5 1.5 0 0 1 2.1 0l6.2 6.2"/><path d="m14.5 16.5 2.4-2.4a1.5 1.5 0 0 1 2.1 0l2.4 2.4"/></svg></button>
+            <input type="file" id="imgInput" accept="image/*" style="display:none" />
+            <button class="mic-btn" id="fileBtn" title="上传文件（小文本直读；PDF/大文件存盘后交给 Hermes 读取）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="12.5" y2="17"/></svg></button>
+            <input type="file" id="fileInput" style="display:none" />
+            <button class="mic-btn" id="micBtn" title="语音输入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.8" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="18" x2="12" y2="21.2"/></svg></button>
+            <div class="spacer"></div>
+            <div class="seg" id="modeSeg" title="对话模式：思考=展示深度思考过程，快速=跳过">
+              <button type="button" data-mode="fast">快速</button>
+              <button type="button" data-mode="think" class="on">思考</button>
+            </div>
+            <select id="modelSelect"></select>
+            <button class="send-btn" id="sendBtn" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5.5"/><polyline points="6.5,11 12,5.5 17.5,11"/></svg></button>
           </div>
-          <div class="spacer"></div>
-          <select id="modelSelect"></select>
         </div>
         <div class="img-preview" id="imgPreview"></div>
         <div class="img-preview" id="filePreview"></div>
