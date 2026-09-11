@@ -98,10 +98,16 @@ else
   done
 fi
 
-# ---------- 5. KB 接口（公开只读）----------
+# ---------- 5. KB 接口（P2-10：与 /api/* 同一闸门，需 token）----------
 echo
 echo "[5] 知识库接口"
-KB_STATUS="$(curl -s -m 5 "http://${HOST_}:${PORT}/api/kb/status" 2>/dev/null)"
+# P2-10 不变量：不带 token 必须 401。KB 曾作为公开路由（原 4174 遗留），
+# 而其中含 MEMORY.md 私有笔记 —— 这条断言保证它不会再悄悄变回公开。
+if [ -n "${TOKEN}" ]; then
+  CODE="$(curl -s -m 5 -o /dev/null -w '%{http_code}' "http://${HOST_}:${PORT}/api/kb/status")"
+  if [ "${CODE}" = "401" ]; then ok "/api/kb/status 无 token -> 401（KB 未暴露）"; else bad "/api/kb/status 无 token -> HTTP ${CODE}（期望 401，KB 可能又变回公开了）"; fi
+fi
+KB_STATUS="$(curl -s -m 5 -H "Authorization: Bearer ${TOKEN}" "http://${HOST_}:${PORT}/api/kb/status" 2>/dev/null)"
 if echo "${KB_STATUS}" | grep -q '"total"'; then
   TOTAL="$(echo "${KB_STATUS}" | sed -n 's/.*"total":\([0-9]*\).*/\1/p')"
   ok "/api/kb/status 可用 (total=${TOTAL})"
@@ -109,7 +115,7 @@ else
   bad "/api/kb/status 无响应"
 fi
 for cat in inbox distilled memory all; do
-  N="$(curl -s -m 5 "http://${HOST_}:${PORT}/api/kb/list?cat=${cat}" 2>/dev/null \
+  N="$(curl -s -m 5 -H "Authorization: Bearer ${TOKEN}" "http://${HOST_}:${PORT}/api/kb/list?cat=${cat}" 2>/dev/null \
        | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))' 2>/dev/null || echo err)"
   if [ "${N}" = "err" ]; then bad "/api/kb/list?cat=${cat} 解析失败"; else ok "/api/kb/list?cat=${cat} -> ${N} 条"; fi
 done

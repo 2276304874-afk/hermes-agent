@@ -50,6 +50,7 @@ process.on('exit', (code) => {
  *   lib/http.js         sendJSON / sse / readBody / serveStatic / tailStreamFile
  *   lib/auth.js         Bearer token
  *   lib/state.js        active（在跑的子进程）/ usageLog（单例可变状态）
+ *   lib/usage.js        用量日志落盘（JSONL）+ 趋势聚合（P3-12）
  *   lib/db.js           state.db 只读轮询
  *   lib/hermes.js       Hermes CLI 调用 + oneshot 流式补丁自愈
  *   lib/ollama.js       Ollama 状态 / 多模态 / 预热门 / 追问生成
@@ -73,6 +74,8 @@ process.on('exit', (code) => {
  *
  * 安全模型：
  *   1. 所有 /api/* 请求需 Bearer token（启动时生成/读取，存 ~/.hermes/ui_token）。
+ *      KB 的 /api/kb/* 同样在内（P2-10 决策，详见 lib/routes/kb.js 头部）；
+ *      公开的只有 GET /kb 页面壳与静态资源。
  *   2. Hermes 高风险命令由 pre_tool_call hook（hooks/safety_check.py）拦截。
  *      用户在前端批准后，本次请求带 allowDangerous=true → 注入 HERMES_UI_BYPASS_SAFETY=1。
  *   3. 静态文件用 path.resolve + path.relative 防路径穿越。
@@ -117,7 +120,8 @@ runStartupMaintenance();
 const publicRouter = createRouter('public');
 const apiRouter = createRouter('api');
 
-// 公开组：KB 查看器 + 只读接口（必须早于静态文件，否则 /kb 会被 serveStatic 拦成 404）
+// 公开组：只剩 KB 查看器**页面壳**（必须早于静态文件，否则 /kb 会被 serveStatic 拦成 404）。
+// P2-10：KB 的数据接口已全部移入认证组，公开的只是一张不含任何数据的 HTML。
 KbRoutes.registerPublic(publicRouter);
 
 // 认证组：顺序对应原 if 链
@@ -125,7 +129,7 @@ SessionRoutes.register(apiRouter);
 SystemRoutes.register(apiRouter);
 ProviderRoutes.register(apiRouter);
 MediaRoutes.register(apiRouter);
-KbRoutes.registerAuthed(apiRouter);   // GET /api/kb?q= 必须排在公开 KB 路由之后
+KbRoutes.registerAuthed(apiRouter);   // P2-10：KB 数据接口（/api/kb/* 与 /api/kb?q=）一律在认证闸门之后
 ChatRoutes.register(apiRouter);
 ToolboxRoutes.register(apiRouter);
 

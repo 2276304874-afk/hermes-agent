@@ -55,9 +55,13 @@ if [ "${code}" = "200" ]; then ok "/api/health → 200"; else bad "/api/health �
 echo
 echo "[1] 公开路由（无需 token）"
 chk "KB 查看器页面"        200 GET  "/kb"                      "" 0
-chk "KB 列表接口"          200 GET  "/api/kb/list?cat=all"     "" 0
-chk "KB 检索接口"          200 GET  "/api/kb/search?q=launchd" "" 0
-chk "KB 状态接口"          200 GET  "/api/kb/status"           "" 0
+# P2-10 不变量：KB 数据接口必须被认证闸门挡住。
+# 它们曾经是公开路由（原 4174 独立服务遗留），而 KB 内含 MEMORY.md 私有笔记 ——
+# 一旦有人把 HOST 改回 0.0.0.0 开局域网，公开的 KB 就等于对全网段裸奔。
+chk "KB 列表需认证"        401 GET  "/api/kb/list?cat=all"     "" 0
+chk "KB 检索需认证"        401 GET  "/api/kb/search?q=launchd" "" 0
+chk "KB 状态需认证"        401 GET  "/api/kb/status"           "" 0
+chk "KB slash 需认证"      401 GET  "/api/kb?q=launchd"        "" 0
 chk "主界面静态文件"       200 GET  "/"                        "" 0
 chk "认证闸门（无 token）" 401 GET  "/api/health"              "" 0
 
@@ -75,6 +79,10 @@ chk "MCP 列表" 200 GET "/api/mcp"      ""
 chk "定时任务" 200 GET "/api/cron"     ""
 chk "技能列表" 200 GET "/api/skills"   ""
 chk "记忆读取" 200 GET "/api/memory"   ""
+# P2-10：带 token 时必须正常（上面已断言无 token 是 401，两边合起来才是完整的不变量）
+chk "KB 列表" 200 GET "/api/kb/list?cat=all" ""
+chk "KB 检索" 200 GET "/api/kb/search?q=launchd" ""
+chk "KB 状态" 200 GET "/api/kb/status" ""
 chk "KB slash 召回" 200 GET "/api/kb?q=launchd" ""
 
 # 用真实会话验证 history / export（无会话则跳过）

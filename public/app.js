@@ -27,6 +27,17 @@
   let blockedCommand = '';    // 最近被拦截的命令，展示在审批弹窗
   let pendingAllowDangerous = false; // 审批通过后的重跑标记
 
+  /* ---------- P1-5 静默 catch 治理 ----------
+   * 规范：catch 里"什么都不做"会让故障看起来像"功能本来就没有"——模型下拉空了、
+   * 设置面板一片空白，用户无从判断是真没有还是坏了。分级处置：
+   *   · softFail  —— 可忽略的降级路径（清理、偏好读写、可选增强），console.debug 留痕。
+   *                  浏览器控制台**不写** launchd 捕获的日志文件，没有刷屏风险，故可放心留痕。
+   *   · console.warn + 界面可见提示 —— 会让用户困惑的失败（列表拉不到、模型拉不到）。
+   * 确实属于正常分支的（如工具输出本来就不是 JSON）留注释说明，不留痕，避免噪声。 */
+  function softFail(where, e) {
+    console.debug('[hermes] ' + where + ' 失败（已降级，可忽略）:', (e && e.message) || e || '');
+  }
+
   /* ---------- B8 亮/暗主题 ---------- */
   const themeBtn = $('themeBtn');
   const SVG_SUN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2.5" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="21.5"/><line x1="2.5" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="21.5" y2="12"/><line x1="5.3" y1="5.3" x2="7" y2="7"/><line x1="17" y1="17" x2="18.7" y2="18.7"/><line x1="5.3" y1="18.7" x2="7" y2="17"/><line x1="17" y1="7" x2="18.7" y2="5.3"/></svg>';
@@ -35,7 +46,7 @@
     document.documentElement.dataset.theme = t;
     themeBtn.innerHTML = t === 'dark' ? SVG_SUN : SVG_MOON;
     themeBtn.title = t === 'dark' ? '切换到亮色主题' : '切换到暗色主题';
-    if (persist) { try { localStorage.setItem('hermes_ui_theme', t); } catch (e) {} }
+    if (persist) { try { localStorage.setItem('hermes_ui_theme', t); } catch (e) { softFail('保存主题偏好', e); } }
   }
   themeBtn.onclick = () => {
     const cur = document.documentElement.dataset.theme || 'dark';
@@ -47,11 +58,11 @@
   /* ---------- B7 快速/思考模式 ---------- */
   const modeSeg = $('modeSeg');
   let chatMode = 'think';   // 'fast' 跳过深度思考过程展示；'think' 展开
-  try { chatMode = localStorage.getItem('hermes_ui_mode') || 'think'; } catch (e) {}
+  try { chatMode = localStorage.getItem('hermes_ui_mode') || 'think'; } catch (e) { softFail('读取模式偏好', e); }
   function setMode(m) {
     chatMode = m;
     for (const b of modeSeg.querySelectorAll('button')) b.classList.toggle('on', b.dataset.mode === m);
-    try { localStorage.setItem('hermes_ui_mode', m); } catch (e) {}
+    try { localStorage.setItem('hermes_ui_mode', m); } catch (e) { softFail('保存模式偏好', e); }
     // 切换后：fast 折叠已有思考块，think 展开（跨轮保持）
     for (const r of document.querySelectorAll('.reason')) r.classList.toggle('open', m === 'think');
   }
@@ -301,7 +312,7 @@
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);
       o.connect(g); g.connect(ctx.destination);
       o.start(); o.stop(ctx.currentTime + 0.35);
-    } catch (e) {}
+    } catch (e) { softFail('完成提示音', e); }   // 提示音失败不影响"完成"本身
     // 系统通知：仅页面不可见时弹，避免打扰；首次触发请求权限
     try {
       if ('Notification' in window) {
@@ -312,7 +323,7 @@
           Notification.requestPermission().then(p => { if (p === 'granted' && document.hidden) new Notification('赫尔墨斯特工 · 任务完成', { body: '用时 ' + sec + 's' }); });
         }
       }
-    } catch (e) {}
+    } catch (e) { softFail('系统通知', e); }   // 通知权限/构造失败，不影响主流程
   }
   function setAnswer(run, text, streaming) {
     const ans = run.querySelector('.answer');
@@ -409,7 +420,7 @@
       else if (c.content != null) out = String(c.content);
       else if (c.error) out = '错误: ' + String(c.error);
       else out = JSON.stringify(c, null, 1);
-    } } catch {}
+    } } catch { /* 工具输出本就不是 JSON（纯文本/空）→ 原样展示。正常分支，留痕只会刷噪声 */ }
     return out;
   }
 
@@ -452,7 +463,13 @@
       renderProvList(data.providers || {});
       const first = Object.keys(presets)[0] || '';
       if (!selectedProviderId && first) { provPreset.value = first; fillPresetForm(first); }
-    } catch {}
+    } catch (e) {
+      // 关键路径：这里静默会让「设置面板一片空白」看起来像「本就没配过接口」。
+      // 与 P1-4 同一条原则 —— 失败必须看得见。
+      console.warn('[hermes] 加载云端接口设置失败:', e);
+      provListEl.innerHTML = '<p style="color:var(--danger, #c0392b);">接口列表加载失败：'
+        + escapeHtml(e.message || String(e)) + '（服务未启动或令牌失效）</p>';
+    }
   }
   function renderProvList(providers) {
     provListEl.innerHTML = '';
@@ -500,7 +517,7 @@
       await apiFetch('/api/providers/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
       selectedProviderId = '';
       await loadProviderSettings(); await loadModels();
-    } catch {}
+    } catch (e) { alert('删除失败: ' + e.message); }
   };
   $('provTest').onclick = async () => {
     // 先暂存表单里的 key（若填了），再测试
@@ -547,9 +564,19 @@
       // 切换模型时预热本地模型
       modelSelect.onchange = () => {
         const v = modelSelect.value;
-        if (!v.startsWith('cloud:')) apiFetch('/api/prewarm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: v }) }).catch(() => {});
+        if (!v.startsWith('cloud:')) apiFetch('/api/prewarm', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: v }) }).catch(err => softFail('预热模型', err));
       };
-    } catch {}
+    } catch (e) {
+      // 关键路径：静默会让模型下拉变空且毫无解释（看起来像「模型全被删了」）。
+      // 不覆盖已有选项，只在真的空着时补一条说明项。
+      console.warn('[hermes] 模型列表加载失败:', e);
+      if (!modelSelect.options.length) {
+        const o = document.createElement('option');
+        o.value = ''; o.disabled = true; o.selected = true;
+        o.textContent = '模型列表加载失败：' + (e.message || e) + '（服务未启动或令牌失效）';
+        modelSelect.appendChild(o);
+      }
+    }
   }
 
   // 历史消息回显：把某会话的全部消息渲染到主区（用户气泡 + 工具卡 + 回答）
@@ -718,7 +745,7 @@
         const stale = !!(h && h.uiVersion && window.__UI_VERSION__ && window.__UI_VERSION__ !== '__UI_VERSION__' && h.uiVersion !== window.__UI_VERSION__);
         const banner = document.getElementById('verBanner');
         if (banner) banner.classList.toggle('show', stale);
-      } catch (e) {}
+      } catch (e) { softFail('界面更新提示', e); }   // 提示条拿不到不影响功能
       const dot = $('ollamaDot'), txt = $('ollamaTxt');
       if (s && s.ollama && s.ollama.up) {
         const m = (s.ollama.models || [])[0];
@@ -731,14 +758,24 @@
         txt.textContent = 'Ollama 未运行';
       }
       if (u) {
-        $('usageList').innerHTML = (u.runs || []).slice(0, 5).map(r => {
+        const rowsHtml = (u.runs || []).slice(0, 5).map(r => {
           const icon = r.cloud ? '<span class="cloud">☁</span>' : '🏠';
           const tps = r.tokPerSec ? '<span class="tps"> ' + r.tokPerSec + 't/s</span>' : '';
           const time = new Date(r.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
           return '<div class="usage-row" title="' + escapeHtml(r.prompt || '') + '">' + icon + ' ' + time + ' · ' + r.elapsedSec + 's' + tps + (r.toolCalls ? ' · 🔧' + r.toolCalls : '') + '</div>';
         }).join('');
+        // P3-12：统计来自落盘 JSONL（~/.hermes/usage.jsonl），跨重启累计 —— 只看近 24h 均值，
+        // 避免不同模型/版本的旧数据混进来掩盖真实变化。无数据时不占位。
+        const s = u.summary || {};
+        const sumHtml = s.last24h
+          ? '<div class="usage-row" title="来自落盘统计 ~/.hermes/usage.jsonl（跨重启累计）">Σ 24h ' + s.last24h + ' 轮'
+            + (s.avgFirstTokenSec24h != null ? ' · 首字均 ' + s.avgFirstTokenSec24h + 's' : '')
+            + (s.avgTokPerSec24h != null ? ' · ~' + s.avgTokPerSec24h + 't/s' : '')
+            + (s.toolCallsTotal ? ' · 🔧' + s.toolCallsTotal : '') + '</div>'
+          : '';
+        $('usageList').innerHTML = rowsHtml + sumHtml;
       }
-    } catch {}
+    } catch (e) { softFail('侧栏状态刷新', e); }   // 15s 周期的可选增强；失败留痕但不停轮询（服务恢复后自愈）
   }
   setInterval(refreshStatus, 15000);
 
@@ -845,7 +882,7 @@
     const src = off.createBufferSource();
     src.buffer = decoded; src.connect(off.destination); src.start();
     const rendered = await off.startRendering();
-    try { ac.close(); } catch {}
+    try { ac.close(); } catch (e) { softFail('关闭音频上下文', e); }   // 已被浏览器回收时 close 会抛，无害
     const wav = float32ToWav(rendered.getChannelData(0), dstRate);
     if (wav.length > 16 * 1024 * 1024) throw new Error('录音过长，请控制在 3 分钟内');
     const r = await apiFetch('/api/transcribe', {
@@ -865,7 +902,7 @@
   }
   micBtn.onclick = async () => {
     if (micBusy) return;
-    if (mediaRec) { try { mediaRec.stop(); } catch {} return; }   // 再点一次停止
+    if (mediaRec) { try { mediaRec.stop(); } catch (e) { softFail('停止录音', e); } return; }   // 再点一次停止
     if (!navigator.mediaDevices || !window.MediaRecorder) { alert('当前浏览器不支持录音，请使用 Chrome / Edge / Safari'); return; }
     let stream;
     try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
@@ -897,7 +934,7 @@
     };
     mediaRec.start();
     micSetState('rec');
-    micTimer = setTimeout(() => { if (mediaRec) { try { mediaRec.stop(); } catch {} } }, 180000);   // 上限 3 分钟
+    micTimer = setTimeout(() => { if (mediaRec) { try { mediaRec.stop(); } catch (e) { softFail('录音超时停止', e); } } }, 180000);   // 上限 3 分钟
   };
 
   /* ---------- L5: 工具箱（MCP / 定时任务 / 技能 / 记忆） ---------- */
@@ -1322,7 +1359,7 @@
       return;
     }
     if (busy) {
-      try { await apiFetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: currentRunId, sessionId }) }); } catch (e) {}
+      try { await apiFetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: currentRunId, sessionId }) }); } catch (e) { softFail('请求停止本轮', e); }   // 尽力而为：真正的兜底是断开 SSE
       return;
     }
     const img = (promptOverride == null) ? pendingImg : null;   // 仅手动发送带图

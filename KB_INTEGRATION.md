@@ -102,10 +102,24 @@ T3 是本次对接的核心价值：**让「赫尔墨斯特工」能主动「调
 | 编号 | 实现 | 文件 | 说明 |
 |---|---|---|---|
 | L1 | KB 函数 `kbListEntries` / `_kbParseBlocks` / `ollamaStatusSync` | `server.js` | 镜像 serve.py 的列举+状态，纯读、异常降级 |
-| L2 | 路由 `/kb`、`/api/kb/list`、`/api/kb/search`、`/api/kb/status` | `server.js` | 认证前公开暴露，复用 `recallHits` |
+| L2 | 路由 `/kb`（页面壳）+ `/api/kb/list`、`/api/kb/search`、`/api/kb/status`、`/api/kb?q=` | `lib/routes/kb.js` | **P2-10 定案：数据接口全在认证闸门之后**（见下方「认证策略」），复用 `recallHits`；只有 `/kb` 页面壳公开 |
 | L3 | viewer.html 改打 `/api/kb/*` + 页脚改 4173 | `kb/viewer.html` | 同源工作 |
 | L4 | 主 UI 顶栏「知识库」按钮 → 打开 `/kb` | `public/index.html` | 用户可达 |
 | L5 | `kb-query` 技能 | `~/.hermes/skills/kb-query/SKILL.md` | 智能体主动调用（T3） |
+
+### 认证策略（P2-10 定案，2026-09-11）
+
+**KB 数据接口需 Bearer token，与 `/api/*` 同一把。** 不再走"公开只读"。
+
+- 理由 ①：KB 内含 `MEMORY.md` 这类私有笔记，是本项目最敏感的数据；
+- 理由 ②：服务其余 `/api/*` 全部要令牌，唯独 KB 例外 → 认知负担，且容易被当成漏洞；
+- 理由 ③：原先的兜底理由"只绑 127.0.0.1"太脆 —— `HOST` 只是 plist 里一行 env，
+  2026-09-06 曾为局域网访问改成 `0.0.0.0`，一旦再开，公开的 KB 即对整个网段可读。
+- 实现：接口移入认证组；`GET /kb` **页面壳**保持公开（只是一张不含数据的 HTML）。
+  `viewer.html` 从同源 `localStorage('hermes_ui_token')` 取令牌（与主界面共用，不必输两遍），
+  401 时页面顶部弹出补填提示。
+- 护栏：`test/routes.smoke.sh` 与 `healthcheck.sh` 各有一条"无 token 必须 401"的断言，
+  防止哪天又被改回公开。
 
 ### 仍可选 / 待定
 - **停用 4174**：把 `kb/serve.py` 改为可选；若保留，建议加注释说明「已被 4173 取代」。
@@ -117,11 +131,15 @@ T3 是本次对接的核心价值：**让「赫尔墨斯特工」能主动「调
 ## 7. 验证方式（重启主服务后）
 
 ```bash
-# 服务起后，三条命令应都返回 JSON
-curl -s "http://127.0.0.1:4173/api/kb/list?cat=all"      | head -c 200
-curl -s "http://127.0.1:4173/api/kb/search?q=launchd"    | head -c 200
-curl -s "http://127.0.0.1:4173/api/kb/status"            | head -c 200
-# 浏览器打开 http://127.0.0.1:4173/kb 应能看到知识库查看器
+# 服务起后，前三条应都返回 JSON（P2-10 起需带 Bearer 令牌；不带则 401）
+T=$(cat ~/.hermes/ui_token)
+curl -s -H "Authorization: Bearer $T" "http://127.0.0.1:4173/api/kb/list?cat=all"   | head -c 200
+curl -s -H "Authorization: Bearer $T" "http://127.0.0.1:4173/api/kb/search?q=launchd" | head -c 200
+curl -s -H "Authorization: Bearer $T" "http://127.0.0.1:4173/api/kb/status"         | head -c 200
+# 反证：不带令牌必须 401
+curl -s -o /dev/null -w '%{http_code}\n' "http://127.0.0.1:4173/api/kb/status"
+# 浏览器打开 http://127.0.0.1:4173/kb 应能看到知识库查看器（首次需在顶部填一次令牌）
 ```
 
-> 注意：当前主服务因崩溃排查中，需先按 `bash ~/WorkBuddy/赫尔墨斯特工/setup.sh` 重启后再验证。
+> 注意：改完代码需让守护加载新版本 —— `launchctl kickstart -k gui/$(id -u)/com.hermes-agent.ui`
+> （或重跑 `bash ~/WorkBuddy/赫尔墨斯特工/setup.sh`）后再验证。

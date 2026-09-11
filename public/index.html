@@ -25,7 +25,8 @@
     try {
       var t = localStorage.getItem('hermes_ui_theme');
       if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
-    } catch (e) {}
+    } catch (e) { /* 隐私模式禁用 localStorage → 用默认暗色即可。此处是防闪烁的内联脚本，
+                   * 跑在 app.js 之前，不能依赖 softFail；且失败后果仅是主题回默认，无害。 */ }
   })();
   // 适配浏览器缓存：服务端把 __UI_VERSION__ 替换成 public/ 目录内所有文件的
   // 最大 mtime（含 app.css / app.js）。老浏览器可能无视 no-store 缓存旧页面——

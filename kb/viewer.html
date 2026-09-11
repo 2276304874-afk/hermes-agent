@@ -58,6 +58,16 @@
   .dot.ok { background:var(--ok); }
   .dot.bad { background:var(--bad); }
   .statusbar .sp { margin-left:auto; }
+  /* P2-10：KB 接口与主服务共用同一把 Bearer 令牌 —— 缺令牌/令牌失效时在顶部提示补填 */
+  .authbar { flex:none; display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+             padding:10px 22px; background:#fff8e6; border-bottom:1px solid #f0dfae;
+             color:#7a5b12; font-size:13px; }
+  .authbar[hidden] { display:none; }
+  .authbar input { padding:7px 10px; border:1px solid #e0cf9a; border-radius:7px; font-size:13px;
+                   min-width:260px; background:#fff; color:inherit; }
+  .authbar button { padding:7px 14px; border:0; border-radius:7px; background:var(--accent);
+                    color:#fff; cursor:pointer; font-size:13px; }
+  .authbar .msg { color:var(--bad); }
 </style>
 </head>
 <body>
@@ -90,6 +100,12 @@
   </aside>
 
   <main class="main">
+    <div class="authbar" id="authBar" hidden>
+      <span>需要访问令牌（与主界面同一把，见 <code>~/.hermes/ui_token</code>）</span>
+      <input id="tokInput" type="password" placeholder="粘贴令牌" autocomplete="off">
+      <button id="tokSave">保存</button>
+      <span class="msg" id="tokMsg"></span>
+    </div>
     <div class="topbar">
       <h2 id="title">全部条目</h2>
       <div class="desc" id="desc">捕获片段 / 蒸馏技能 / 长期记忆 · 复用 recall 语义检索</div>
@@ -107,6 +123,37 @@
   </main>
 </div>
 <script>
+/* ---------- P2-10: 统一认证（KB 不再"公开"） ----------
+ * 背景：这三个接口曾作为公开路由（原 4174 独立服务遗留），只靠"绑 127.0.0.1"兜底。
+ * 但绑定地址只是 plist 里一行 env（HOST=0.0.0.0 曾为局域网访问开过），而 KB 里有
+ * MEMORY.md 这类私有笔记 —— 一旦再开局域网，它就会对整个网段裸奔。
+ * 定案：与 /api/* 同闸门，走同一把 Bearer 令牌；页面壳 /kb 仍公开（只是一张空 HTML）。
+ * 令牌存同源 localStorage('hermes_ui_token')，与主界面共用，无需输两遍。 */
+function getToken(){ try { return localStorage.getItem('hermes_ui_token') || ''; } catch { return ''; } }
+function setToken(t){ try { localStorage.setItem('hermes_ui_token', t); } catch { /* 隐私模式下不持久，仅本次会话可用 */ } }
+function showAuthBar(msg){
+  document.getElementById('authBar').hidden = false;
+  document.getElementById('tokMsg').textContent = msg || '';
+}
+function hideAuthBar(){
+  document.getElementById('authBar').hidden = true;
+  document.getElementById('tokMsg').textContent = '';
+}
+async function kbFetch(url){
+  const t = getToken();
+  const r = await fetch(url, { headers: t ? { Authorization: 'Bearer ' + t } : {} });
+  if (r.status === 401) { showAuthBar('令牌无效或未填写'); throw new Error('未授权（401）—— 请在上方填写访问令牌'); }
+  return r;
+}
+document.getElementById('tokSave').onclick = () => {
+  const v = document.getElementById('tokInput').value.trim();
+  if (!v) { document.getElementById('tokMsg').textContent = '令牌不能为空'; return; }
+  setToken(v); hideAuthBar();
+  document.getElementById('tokInput').value = '';
+  go(); refreshStatus();
+};
+if (!getToken()) showAuthBar('首次使用请填写访问令牌');
+
 const TITLES = { all:'全部条目', inbox:'捕获片段', distilled:'蒸馏技能', memory:'长期记忆', search:'搜索结果' };
 const DESCS = {
   all:'捕获片段 / 蒸馏技能 / 长期记忆 一览',
@@ -136,10 +183,13 @@ async function go(){
     ? '/api/kb/search?q=' + encodeURIComponent(q)
     : '/api/kb/list?cat=' + curCat;
   try {
-    const r = await fetch(url);
+    const r = await kbFetch(url);
     const data = await r.json();
-    if (!data.length) { list.innerHTML = '<div class="empty">暂无内容</div>'; return; }
-    list.innerHTML = data.map(e => `
+    // 两个接口的返回形状不同（历史遗留）：/api/kb/list → 数组；/api/kb/search → {query,count,results}。
+    // 合并到 4173 后这里曾直接对 search 的结果调 .map()，导致搜索永远显示"暂无内容"——已归一。
+    const items = Array.isArray(data) ? data : (data && data.results) || [];
+    if (!items.length) { list.innerHTML = '<div class="empty">暂无内容</div>'; return; }
+    list.innerHTML = items.map(e => `
       <div class="card">
         <div class="meta">
           <span class="badge">${esc(e.type||e.cat)}</span>
@@ -149,13 +199,13 @@ async function go(){
         <div class="txt">${esc(e.text)}</div>
       </div>`).join('');
     const t = document.getElementById('title');
-    if (curCat === 'search') t.textContent = `搜索结果（${data.length}）`;
+    if (curCat === 'search') t.textContent = `搜索结果（${items.length}）`;
   } catch(e){ list.innerHTML = '<div class="empty">加载失败：'+esc(e.message)+'</div>'; }
 }
 
 async function refreshStatus(){
   try {
-    const r = await fetch('/api/kb/status');
+    const r = await kbFetch('/api/kb/status');
     const s = await r.json();
     document.getElementById('cnt-all').textContent = s.total||0;
     document.getElementById('cnt-inbox').textContent = (s.counts&&s.counts.inbox)||0;

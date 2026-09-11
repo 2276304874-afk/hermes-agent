@@ -14,6 +14,7 @@
  *   L3 渲染层：CSS 变量生效、关键 DOM 存在且有尺寸
  *   L4 健康层：加载与初始化期间零 pageerror、零 console.error
  *   L5 降级层：拦截 /api/sessions 返回 degraded，告警必须出现且不阻断列表（P1-4）
+ *   L6 KB 页层：/kb 带令牌可渲染、搜索按 {results:[]} 形状渲染、无令牌须提示补填（P2-10）
  *
  * 用法：
  *   node test/ui.smoke.js [port] [token]
@@ -210,6 +211,53 @@ const CONSOLE_WHITELIST = [
     await page.unroute('**/api/sessions');
     await page.reload({ waitUntil: 'load' });
     await page.waitForTimeout(1200);
+
+    /* ---------- L6 KB 查看器（P2-10 认证 + 返回形状归一） ---------- */
+    // 两件「页面打得开、但功能其实是空的」的故障，肉眼极难发现，故固化进冒烟网：
+    //   ① KB 接口已移入认证闸门 → /kb 页面不带令牌时全是 401（页面本身仍 200，只是空）；
+    //   ② /api/kb/list 返回数组、/api/kb/search 返回 {results:[]} —— 合并到 4173 后
+    //      搜索分支直接对对象调 .map()，导致搜索永远显示"暂无内容"（本次修掉的真实 bug）。
+    console.log('L6 KB 查看器');
+    const kbErrorsBefore = pageErrors.length;
+    await page.goto(`${BASE}/kb`, { waitUntil: 'load' });
+    await page.waitForTimeout(1200);
+    const authHidden = await page.$eval('#authBar', el => el.hidden).catch(() => null);
+    check(authHidden === true, '有令牌时不再提示补填', String(authHidden));
+    const kbListText = await page.$eval('#list', el => el.textContent).catch(() => '');
+    check(!/加载失败/.test(kbListText), 'KB 列表正常渲染（非 401/报错）', kbListText.slice(0, 30));
+
+    // 用拦截构造 search 的**真实**形状（对象而非数组），锁死"形状归一"这处回归
+    await page.route('**/api/kb/search*', r => r.fulfill({
+      status: 200, contentType: 'application/json',
+      body: JSON.stringify({
+        query: 'launchd', count: 1,
+        results: [{ cat: 'search', type: '经验', src: 'test.md', text: '形状归一回归样本', score: 0.9 }],
+      }),
+    }));
+    await page.click('#nav button[data-cat="search"]');
+    await page.fill('#q', 'launchd');
+    await page.click('#searchRow button');
+    await page.waitForTimeout(900);
+    const searchText = await page.$eval('#list', el => el.textContent).catch(() => '');
+    check(/形状归一回归样本/.test(searchText), '搜索结果按 {results:[]} 形状渲染', searchText.slice(0, 40));
+    await page.unroute('**/api/kb/search*');
+
+    // 反面：令牌无效时必须弹出补填提示，而不是静默显示空列表。
+    // 注意：ctx.addInitScript 每次导航都会把正确令牌重新写进 localStorage，
+    // 所以这里改测"令牌错误 + 触发请求"——走的是同一条 401 → showAuthBar 路径，
+    // 比单纯清 localStorage 更贴近真实故障（用户在另一台机器/换了令牌）。
+    await page.evaluate(() => localStorage.setItem('hermes_ui_token', 'wrong-token-for-smoke'));
+    await page.click('#nav button[data-cat="all"]');
+    await page.waitForTimeout(900);
+    const authShown = await page.$eval('#authBar', el => el.hidden).catch(() => null);
+    check(authShown === false, '令牌无效时提示补填令牌', String(authShown));
+    check(pageErrors.length === kbErrorsBefore, 'KB 页面无 JS 运行时错误',
+      pageErrors.length > kbErrorsBefore ? pageErrors.slice(kbErrorsBefore, kbErrorsBefore + 2).join(' | ') : '');
+
+    // 恢复令牌并回到主界面，让末尾截图反映正常态
+    await page.evaluate(t => localStorage.setItem('hermes_ui_token', t), TOKEN);
+    await page.goto(`${BASE}/`, { waitUntil: 'load' });
+    await page.waitForTimeout(800);
 
     /* ---------- 截图存档 ---------- */
     try {
