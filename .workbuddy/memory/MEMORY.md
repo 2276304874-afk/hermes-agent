@@ -22,17 +22,23 @@
   - **前端结构(2026-09-11 第四步后,提交 `a2e8c7c`)**:`public/index.html` 1864 → **151 行**(只剩骨架 + 一段必须内联的脚本) / `public/app.css` 289 行样式 / `public/app.js` 1422 行逻辑(保留 IIFE,零改动搬迁)。
   - ⚠️ **前端三条不变量**:①head 里的「主题初始化 + 版本戳」**不可外移**(须在 `<body>` 渲染前同步执行,外移会有一帧亮色闪烁);②`<script src="/app.js">` 必须在 body 末尾且**不加 defer/async**;③不改成 ES module(会变严格模式 + 顶层 import/export 语义变化 = 顺手改行为)。
   - ⚠️ **拆分 HTML 时必查的三个静默回归**(机制坏了但功能"看起来正常"):版本戳作用域(原来只取 index.html mtime → 改 JS 不触发提示条)/ 缓存头(.js/.css 若 max-age 会出现"新 HTML + 旧 JS"半新半旧)/ 注释过期(架构注释仍描述旧结构)。
-- **测试四步曲**(改完代码的标准流程):
-  1. `npm test` —— `test/parse.test.js` 22 例 + `test/cloud.test.js` 7 例 = **29 例**,node:test 零依赖。fixture 必须标 `[真实]`(抄自本机 CLI 实际输出)/`[合成]`(按已知格式构造)。
+- **测试五步曲**(改完代码的标准流程):
+  1. `npm test` —— **51 例**,node:test 零依赖,四个文件:
+     - `test/parse.test.js`(22)纯解析层 / `test/cloud.test.js`(7)云端回退语义 / `test/http.test.js`(20)**写出护栏与流式正确性** / `test/wiring.test.js`(2)**接线自检**。
+     - fixture 必须标 `[真实]`(抄自本机 CLI 实际输出)/`[合成]`(按已知格式构造)。
      - ⚠️ 本机 node 22.22.2 的 `node --test <目录>` 会被当成模块路径 → 必须写 `node --test test/*.test.js`。
      - `cloud.test.js` 的重点是**回退语义**:未知本地模型名 → `DEFAULT_MODEL`;不完整 `cloud:` 串 → 回落本地(否则拿空 model 请求云端)。这两条回归后现象是"选某模型就失败",日志看不出根因。
+     - `http.test.js` 的 mock **故意在误用时抛错**(复刻 `ERR_HTTP_HEADERS_SENT` / `ERR_STREAM_WRITE_AFTER_END`),这样"护栏生效"才是**可证伪**的 —— 谁删掉前置检查,用例立刻变红。
+     - `wiring.test.js` 静态扫描全部 `const {…} = require('…')` 逐名核对导出存在。**起因是真事故**:加了 `startHeartbeat` 函数却忘了加进 `module.exports` → 启动即 `TypeError` 崩溃循环,而 `node --check` 只看语法、单测不覆盖启动路径,原本抓不到。(已反证:临时删掉导出,该用例立刻红并精确指认文件与符号。)
   2. `bash test/routes.smoke.sh` —— **44 项路由清单冒烟**(`npm run smoke`)。判据不是 200 而是**命中**:400/401/404(业务) 都算通过,只有落到兜底 `not found` 才说明路由丢了。全部请求走参数校验分支,**零副作用**(不建 cron/不装技能/不写记忆/不删会话)。支持 `HERMES_TOKEN=x bash test/routes.smoke.sh 4199` 打备用端口。
   3. `node test/ui.smoke.js [port] [token]` —— **前端浏览器冒烟(22 项)**(`npm run ui`)。无头 Chrome 实际加载页面,四层判据:L1 传输(200+MIME) / L2 执行(看版本戳是否被服务端替换,证明 app.js 真跑了) / L3 渲染(CSS 变量可读、关键 DOM 非零尺寸、注入 token 后登录遮罩隐藏) / L4 健康(零 pageerror、零 console.error、零 4xx)。
      - 实现关键:**用 `playwright-core` + `executablePath` 指本机已装 Chrome**,不下载浏览器。playwright-core 在 `~/.workbuddy/binaries/node/workspace/node_modules`(脚本内有多路兜底,不依赖 NODE_PATH)。二者缺一时打 SKIP 退 0,但明确标注"前端未经验证"。
      - 踩坑:资源类 console.error 的**文本里不含 URL**(只有 `Failed to load resource ... 404`),只按文本做 favicon 白名单会误判 → 必须同时取 `m.location().url`。
-  4. `bash healthcheck.sh` —— 19 项服务级自检(`npm run health`),退出码 0/1。
+  4. `bash healthcheck.sh` —— **20 项**服务级自检(`npm run health`),退出码 0/1。
+     - ⚠️ 日志检查**只统计「本次启动以来」**,以 stderr 的 `[lifecycle] 启动` 行为界。err.log 是追加式的,全量统计会把历史故障一直当成当前故障报(真踩到:修完 bug 后自检仍红,报的是两条已修复的旧 `[FATAL]`)。
+     - 含 `[handler]` 请求异常检查 —— 这是 P0-2 加固前**完全看不到**的信号(handler 抛错但被兜底接住、服务没死)。
   最后 `git commit`;需要生效时 `launchctl kickstart -k gui/$(id -u)/com.hermes-agent.ui`(前端三文件实时读盘 + no-cache,改完刷新即可,无需重启;只有改 `lib/` 才需 kickstart)。
-- **启动日志可核对项**:`路由登记:公开 N 条 / 认证 M 条`(漏登记立刻可见)、`KB 解释器:<path>`(路径腐烂可见)、`流式补丁:…`(oneshot 自愈状态)。
+- **启动日志可核对项**:`路由登记:公开 N 条 / 认证 M 条`(漏登记立刻可见)、`KB 解释器:<path>`(路径腐烂可见)、`流式补丁:…`(oneshot 自愈状态)、`[hb start] uptime=0s rss=…MB active=…`(内存/子进程泄漏基线)。
 
 ## 备份与异地镜像(2026-09-11 建立)
 - **本地 bundle**:`npm run backup`(`backup.sh`)。产物落 `../_hermes-backups/hermes-repo-<时间戳>.bundle`,默认保留最近 10 份(`HERMES_BACKUP_KEEP` 可改)。可传外部目标:`bash backup.sh /Volumes/xxx`(复制后 sha256 双向核对)。**还原:`git clone <bundle> <目录>`**——已实测可完整还原(11 提交 / 80 文件 / 关键文件 sha256 与工作区一致)。
@@ -66,6 +72,41 @@
 - **写含中文的 bash 脚本:变量引用一律写 `${VAR}`**。写成 `$VAR` 且后面紧跟全角字符(如 `）`、`，`)时,bash 会把那些字节并进变量名,`set -u` 下直接报 `unbound variable`(healthcheck.sh 踩过)。
 - **`grep -c` 无匹配时输出 `0` 但退出码为 1** → 不可写 `F=$(grep -c x f || echo 0)`,会得到 `"0\n0"`。正确写法:`F=$(grep -c x f 2>/dev/null); F="${F:-0}"`。
 
+## 崩溃归因与加固(P0-2,2026-09-11 定位并修复,提交 `436bf0e`)
+### 方法论:先做最小实验,再下结论
+**逐条假设 → 写 10 行探针实测 → 才决定改什么**。本次我最初的判断(异步回调写已 end 的响应会崩)被实验**直接推翻**,若不实测就会去"修"一个不存在的问题。Node v22.22.2 实测结论:
+
+| 假设 | 实测结果 |
+|---|---|
+| 异步回调里往已 end 的响应 `write` | **无害**(静默 no-op,响应已 destroyed 时 `destroy(err)` 直接返回) |
+| `end()` 两次 + 之后 `write` | 无害 |
+| `spawn` 不存在的可执行(有/无 error 监听) | 无害 |
+| **响应头已发后 catch 再 `sendJSON` 500** | ⚠️ **抛 `ERR_HTTP_HEADERS_SENT`,致命** |
+| **`res` 上 `emit('error')` 且无人监听** | ⚠️ **直接杀进程** |
+
+### 根因:兜底 catch 的二次写头
+`server.js` 的 `createServer` 兜底曾是裸的 `sendJSON(res, 500, …)`;而 `chat.js` 在 `handleChat` 一开头就 `writeHead(200, SSE)`,之后还有一堆可抛错调用(`resolveModel`/`providerHealth`/`recallContext`/`spawn`/SQLite)。一旦抛错 → catch 里 `writeHead` 再执行 → 抛错 → **该二次异常逃出 catch → unhandledRejection → 进程退出**。
+A/B 实测(新旧均 require 真实 `lib/http.js`):旧版 `💥 unhandledRejection: ERR_HTTP_HEADERS_SENT`,进程死,客户端拿到 **HTTP 000**(正是用户看到的 "Failed to fetch");新版进程存活。
+
+### 加固清单(改这类服务必查)
+- **响应写出必须前置检查**:`sendJSON` 看 `headersSent/writableEnded`,不能写就丢弃 + 记日志;**绝不二次写头**。`sse` 看 `writableEnded/destroyed`(tail 回调是异步的,本就可能晚到)。
+- **`req`/`res` 上必须挂 `'error'` 监听**。EventEmitter 语义:无人监听的 `'error'` 会升格为未捕获异常直接杀进程(客户端 RST 就会触发)。
+- **兜底 catch 要能区分"能否回错"**:先 `console.error` 记堆栈(handler 异常此前完全静默 = 零排查线索的一半原因),再只在未写响应时回 500。
+- **`readBody` 必须处理 `'aborted'`/`'close'`**:否则客户端中途 abort 时 Promise 永不 settle → handler 永久挂起 → 连接与其拉起的子进程都不释放。用 `settled` 标志防止正常 `end` 之后的 `close` 把已成功结果改成失败。
+- **`tailStreamFile` 只推进已解码字节数**(`offsetRef.pos += end`)。原写法 `= st.size` 会把尾部半个多字节序列**永久跳过**,表现为流里偶尔丢字。
+- **`active` 清理必须只有一个出口**:`chat.js` 的 `req.on('close')` 曾自己 `clearInterval` + `unlink` 却漏了 `active.delete` → 每次客户端中断泄漏一条指向已死子进程的映射(内存泄漏,且 `/api/stop` 能"查到"早没了的进程)。现在统一走 `finish()`。
+
+### 死亡归因(以后不用再猜)
+`server.js` 启动即在 **stderr 写 `[lifecycle] 启动 pid=… node=…`**,并挂 `SIGTERM/SIGINT/SIGHUP`(先记录再 `removeAllListeners` + 重新发给自己,**退出语义不变**)+ `process.on('exit')` 记录 code 与运行时长。判读规则:
+- 有 `[FATAL …]` → 代码崩了,看堆栈
+- 有 `[lifecycle] 收到 SIGTERM` → 外部要求停止(launchctl stop / kill)
+- **什么都没有 = SIGKILL** → `launchctl kickstart -k` 用的就是 SIGKILL(无法捕获);方向转为查"谁发的 kill",**不是**查代码
+
+**回溯结论**:历史上那批"静默死亡"里,相当一部分**不是崩溃**——是进程被外部杀掉/回收(早期 nohup 进程随会话被回收、我反复 kickstart),而当时的 stderr 要么被丢弃要么没装守护。真正会崩的路径是上面那条 **B**,它确实会在对话中途发生。
+
+### 运行时心跳
+`startHeartbeat(active)`(在 `lib/maintenance.js`)在 listen 后打基线,之后每 30 分钟一行:rss / heapUsed / active(在跑子进程数),rss>800MB 告警。周期用 `HERMES_HB_MS` 覆盖(验证时调小)。`timer.unref()` 不阻止退出。**用它观察泄漏趋势,别等它变成"服务没了"。**
+
 ## 知识库(KB)集成
 - 统一入口=主服务 4173:`GET /kb`(托管 `kb/viewer.html`)、`GET /api/kb/list?cat=inbox|distilled|memory|all`(**返回纯数组**)、`GET /api/kb/search?q=`(复用 recallHits)、`GET /api/kb/status`。均为公开只读(仅 127.0.0.1)。
 - 数据源:`kb_inbox.md` / `kb_distilled.md` / `~/.hermes/memories/MEMORY.md`(实测 19/23/1 = 43 条)。
@@ -76,10 +117,12 @@
 - ✅ launchd 守护已装成功(state=running,RunAtLoad+KeepAlive);kickstart 可自重启。
 - ✅ KB 集成落地(viewer.html 同源化 + `/api/kb/*` + 顶栏入口 + kb-query 技能)。
 - ✅ P2-7 残留脚本归档到 `archive/one-off-fix-scripts-20260911/`;P2-8 serve.py 标弃用;P2-9 `resolvePython()` + sync.sh 动态解析 + `warnIfParseEmpty` 格式保鲜告警。
-- ✅ **git 建库完成**(5 次提交 `f5d8a7b` → `9f93aa2` → `7f31a07` → `6b3b0da` → `a2e8c7c`);**P1-6 测试基线完成**(29 例单测 + 44 项路由冒烟 + **22 项浏览器冒烟** + 19 项健康自检);**P1-3 四步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848) → lib/ 12 个域模块(849→141) → 前端 html/css/js 三分(1864→151)。
-- ✅ **全局崩溃日志已证明有用**:`server.js` 头部的 `uncaughtException`/`unhandledRejection` 处理器 + `[FATAL ...]` 输出,在前端拆分时实测抓到过一次启动期 `ReferenceError`(并行编辑丢更新导致),把"静默死"变成了带完整堆栈的定位。P0-2「崩溃根因未定」由此降级为「已有捕获手段,等复现」。
-- ⏳ 待办:P0-2 崩溃根因(等复现) / P2-10 KB 认证决策 / `parseSkillsList` 死代码待清 / 前端 `app.js` 1422 行可考虑按域再分(现在至少已有语法网 + 浏览器冒烟网兜底,比此前安全得多)。
+- ✅ **git 建库完成**;**P1-6 测试基线完成**(**51 例单测** + 44 项路由冒烟 + **22 项浏览器冒烟** + **20 项健康自检**);**P1-3 四步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848) → lib/ 12 个域模块(849→141) → 前端 html/css/js 三分(1864→151)。
+  关键提交:`f5d8a7b` 建库 → `9f93aa2` 解析层 → `7f31a07` 路由表 → `6b3b0da` lib 域模块 → `a2e8c7c` 前端三分 → `cf5b03f` 备份 → `107676a` API 镜像 → `436bf0e` P0-2 加固。
+- ✅ **P0-2 已完成**(提交 `436bf0e`):根因是**兜底 catch 二次写头** → `ERR_HTTP_HEADERS_SENT` → unhandledRejection → 进程退出(A/B 实测确认,客户端表现为 `HTTP 000` = "Failed to fetch")。已封堵 + 补 `req`/`res` error 监听 + 死亡归因(`[lifecycle]`) + 运行时心跳。详见上方「崩溃归因与加固」段。
+- ✅ **全局崩溃日志已两次实战生效**:前端拆分时抓到启动期 `ReferenceError`(并行 Edit 丢更新);P0-2 加固时抓到 `startHeartbeat is not a function`(漏了 export)。两次都是"启动即崩"级别的静默故障,现在都有精确堆栈 —— 配合 `test/wiring.test.js` 已能提前在测试阶段挡住第二类。
+- ⏳ 待办:P2-10 KB 认证决策 / `parseSkillsList` 死代码待清 / 前端 `app.js` 1422 行可考虑按域再分(已有语法网 + 浏览器冒烟网兜底,比当初安全得多)。
 - ✅ **离机备份 + 异地镜像已建立**(2026-09-11):`npm run backup`(本地 bundle,可还原)+ `npm run mirror`(GitHub 私有库 `2276304874-afk/hermes-agent`)。详见上方「备份与异地镜像」段。此前"提交只存在本地 .git"的单点风险已消除。
-- 📌 **标准验收命令一次跑全**:`npm test && npm run smoke && npm run ui && npm run health`;`npm run check` 覆盖 server.js + lib/** + public/app.js + scripts/**。
+- 📌 **标准验收命令一次跑全**:`npm test && npm run smoke && npm run ui && npm run health`;`npm run check` 覆盖 server.js + lib/** + lib/routes/** + public/app.js + scripts/** + test/**。
 - 小隐患(未修,不紧急):`POST /api/memory/save` 的「只允许写固定路径」防御是**恒真的死代码**(`which` 三元只可能落在两个常量上),安全性没问题但注释有误导。
 - 改进清单见 `IMPROVEMENT_PLAN.md`;历史路线图见 `UPGRADE_ROADMAP.md` 与 daily logs。
