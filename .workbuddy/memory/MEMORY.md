@@ -10,17 +10,20 @@
 
 ## 代码结构与工程化(2026-09-11 起)
 - **已纳入 git**(`main`,身份 `zhaocaozheng@localhost` 仅仓库级,未动全局)。首次提交 `f5d8a7b`,`refactor(parse)` `9f93aa2`。`.gitignore` 忽略 `.workbuddy/kb.db`(FTS5,可重建)、`kb_*_state.json`、`.workbuddy/tmp/`、`.mimosa/ .v2c/ .video_agent/ .zcode/`、`__pycache__`、`*.bak-*`;**kb_inbox.md / kb_distilled.md / memory/ 是内容资产,必须入库**。
-- **分层现状**(2026-09-11 第二步后,提交 `7f31a07`):
-  - `server.js` 848 行 —— 只剩 helper 定义 + 启动自检 + **路由装配** + listen。
-  - `lib/router.js`(约 60 行)—— 极简路由表。**刻意保留原语义:顺序遍历、首个命中即处理、前缀匹配**。禁止换成精确匹配路由(会静默改行为,如 /api/health 要吃掉 query string)。
-  - `lib/parse.js`(177 行,纯解析层,零副作用)。
+- **分层现状**(2026-09-11 第三步后,提交 `6b3b0da`):**`server.js` 仅 141 行**,只剩「启动自检 → 装配路由 → listen」+ 大段架构注释(那是活文档,勿删)。
+  - `lib/config.js` —— 常量与路径**单一真源**。⚠️ WORKSPACE 必须 `path.resolve(__dirname,'..')`(本文件在 lib/ 下,`__dirname` 是 lib 不是工作区根)。
+  - `lib/state.js` —— **单例可变状态**:`active`(runId/sessionId→子进程) / `usageLog` / `recordUsage`。⚠️ **绝不能各模块自行 `new Map()`**,否则 /api/stop 永远找不到正在跑的进程。CommonJS 模块缓存保证同引用。
+  - `lib/http.js`(sendJSON/sse/readBody/serveStatic/tailStreamFile) / `lib/auth.js`(TOKEN/checkAuth) / `lib/db.js`(getDB/withDB/latestSessionId/maxMessageId/newMessages/buildSessionMarkdown) / `lib/hermes.js`(hermesEnv/runHermes/runSessionsList/oneshot补丁自愈+patchState) / `lib/ollama.js`(状态/多模态/prewarm/suggestFollowups) / `lib/cloud.js`(PROVIDER_PRESETS/resolveModel/providerHealth/maskKey) / `lib/knowledge.js`(recallHits/recallContext/kbListEntries) / `lib/skills.js`(scanLocalSkills/embed/ensureSkillIndex) / `lib/maintenance.js`(日志截断+上传清扫)。
+  - `lib/parse.js`(177 行,纯解析层,零副作用) / `lib/router.js`(极简路由表)。
   - `lib/routes/*.js` 7 个模块:`kb`(公开4+认证1) / `session`(5) / `system`(5) / `provider`(5) / `media`(4) / `chat`(2,含 handleChat) / `toolbox`(13) = **认证 35 + 公开 4 = 39 条,与原 if 链分支数逐条对上**。
-  - `ctx` 显式依赖袋:路由模块只允许用登记在案的东西。**新增 helper 供路由用 → 必须同时加进 ctx,否则运行期 ReferenceError**(踩过:`warnIfParseEmpty` 留在 server.js 供 `runSessionsList` 用,却从 require 里删了)。
-  - 装配顺序即匹配优先级,**改动必须保持**:公开组 → 静态文件 → 认证闸门(`/api/*` 无 token 401) → 认证组 → 兜底 404。`patchState` 必须定义在 ctx 之前(否则 /api/health 踩 const TDZ)。
-  - **下一步(第三步)**:把 helper 按域拆进 lib/ —— config / http(sendJSON,sse,readBody,serveStatic) / auth / hermes(runHermes,hermesEnv,oneshot补丁) / db / ollama(含多模态) / cloud(resolveModel,providerHealth) / kb。拆完 ctx 可退场。
+  - **`ctx` 依赖袋已退场**:各路由模块改为文件头直接 `require('../xxx')`,依赖静态可分析。代价是**改了 lib 里的函数名/导出,要重新 grep 全部调用点**(踩过:`warnIfParseEmpty` 从 server.js require 里删了但 `runSessionsList` 还在调)。
+  - ⚠️ **文件名陷阱**:KB 检索逻辑叫 `lib/knowledge.js` 而非 `lib/kb.js` —— `lib/routes/kb.js` 已占该名,同名会让人在 require 时看错目录。
+  - 装配顺序即匹配优先级,**改动必须保持**:公开组 → 静态文件 → 认证闸门(`/api/*` 无 token 401) → 认证组 → 兜底 404。
+  - **下一步(第四步)**:前端 `index.html`(1864 行,3 个内联 script)抽 `public/app.js` + 必要时分模块。后端已可读,**前端现在是全项目最难改的地方**。
 - **测试三步曲**(改完代码的标准流程):
-  1. `npm test` —— `test/parse.test.js` 22 例,node:test 零依赖。fixture 必须标 `[真实]`(抄自本机 CLI 实际输出)/`[合成]`(按已知格式构造)。
+  1. `npm test` —— `test/parse.test.js` 22 例 + `test/cloud.test.js` 7 例 = **29 例**,node:test 零依赖。fixture 必须标 `[真实]`(抄自本机 CLI 实际输出)/`[合成]`(按已知格式构造)。
      - ⚠️ 本机 node 22.22.2 的 `node --test <目录>` 会被当成模块路径 → 必须写 `node --test test/*.test.js`。
+     - `cloud.test.js` 的重点是**回退语义**:未知本地模型名 → `DEFAULT_MODEL`;不完整 `cloud:` 串 → 回落本地(否则拿空 model 请求云端)。这两条回归后现象是"选某模型就失败",日志看不出根因。
   2. `bash test/routes.smoke.sh` —— **44 项路由清单冒烟**(`npm run smoke`)。判据不是 200 而是**命中**:400/401/404(业务) 都算通过,只有落到兜底 `not found` 才说明路由丢了。全部请求走参数校验分支,**零副作用**(不建 cron/不装技能/不写记忆/不删会话)。支持 `HERMES_TOKEN=x bash test/routes.smoke.sh 4199` 打备用端口。
   3. `bash healthcheck.sh` —— 19 项服务级自检(`npm run health`),退出码 0/1。
   最后 `git commit`;需要生效时 `launchctl kickstart -k gui/$(id -u)/com.hermes-agent.ui`。
@@ -56,9 +59,8 @@
 ## 路线图现状(2026-09-11)
 - ✅ launchd 守护已装成功(state=running,RunAtLoad+KeepAlive);kickstart 可自重启。
 - ✅ KB 集成落地(viewer.html 同源化 + `/api/kb/*` + 顶栏入口 + kb-query 技能)。
-- ✅ P2-7 残留脚本归档到 `archive/one-off-fix-scripts-20260911/`;
-- ✅ P2-8 serve.py 标弃用;P2-9 `resolvePython()` + sync.sh 动态解析 + `warnIfParseEmpty` 格式保鲜告警。
-- ✅ **git 建库完成**(3 次提交 `f5d8a7b` → `9f93aa2` → `7f31a07`);**P1-6 测试基线完成**(22 例 + 44 项路由冒烟);**P1-3 第一步完成**(lib/parse.js)、**第二步完成**(lib/router.js + lib/routes/*,server.js 1341→848 行)。
-- ⏳ 待办:**P1-3 第三步**(helper 按域拆 lib/) / P0-2 崩溃根因(等复现) / P2-10 KB 认证决策 / `index.html` 抽 app.js / `parseSkillsList` 死代码待清。
+- ✅ P2-7 残留脚本归档到 `archive/one-off-fix-scripts-20260911/`;P2-8 serve.py 标弃用;P2-9 `resolvePython()` + sync.sh 动态解析 + `warnIfParseEmpty` 格式保鲜告警。
+- ✅ **git 建库完成**(4 次提交 `f5d8a7b` → `9f93aa2` → `7f31a07` → `6b3b0da`);**P1-6 测试基线完成**(29 例 + 44 项路由冒烟 + 19 项健康自检);**P1-3 三步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848 行) → lib/ 12 个域模块(849→141 行,ctx 依赖袋退场)。
+- ⏳ 待办:**前端 `index.html` 拆分**(3 个内联 script / 1864 行,现为全项目最难改处) / P0-2 崩溃根因(等复现) / P2-10 KB 认证决策 / `parseSkillsList` 死代码待清。
 - 小隐患(未修,不紧急):`POST /api/memory/save` 的「只允许写固定路径」防御是**恒真的死代码**(`which` 三元只可能落在两个常量上),安全性没问题但注释有误导。
 - 改进清单见 `IMPROVEMENT_PLAN.md`;历史路线图见 `UPGRADE_ROADMAP.md` 与 daily logs。
