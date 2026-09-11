@@ -126,6 +126,21 @@
   .answer.streaming::after { content: "▌"; color: var(--accent); animation: blink 1s steps(1) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .thinking { color: var(--text-dim); font-style: italic; }
+  /* T2 执行轨迹：有了分阶段进度就不需要「思考中…」占位，避免同一信息出现两次 */
+  .run.has-traj .thinking { display: none; }
+
+  /* ---- T2 Trajectory ---- */
+  .traj { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; margin: 2px 0 6px; font-size: 11px; color: var(--text-dim); }
+  .traj-step { display: inline-flex; align-items: center; gap: 5px; opacity: .45; transition: opacity .2s; }
+  .traj-step.running, .traj-step.done, .traj-step.aborted { opacity: 1; }
+  .traj-ic { width: 7px; height: 7px; border-radius: 50%; background: var(--border); flex: none; }
+  .traj-step.done .traj-ic { background: var(--green); }
+  .traj-step.running .traj-ic { background: var(--accent); animation: traj-pulse 1s ease-in-out infinite; }
+  .traj-step.aborted .traj-ic { background: var(--cloud); }   /* 金色：与「云端/需注意」同语义 */
+  @keyframes traj-pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.5); opacity: .55; } }
+  .traj-t { font-variant-numeric: tabular-nums; color: var(--text-dim); font-weight: 600; }
+  .traj-step.running .traj-t { color: var(--accent); }
+  /* 等宽数字避免跳秒时宽度抖动 */
   .dots::after { content: ""; animation: dots 1.4s steps(4, end) infinite; }
   @keyframes dots { 0% { content: ""; } 25% { content: "."; } 50% { content: ".."; } 75% { content: "..."; } }
   .meta { font-size: 11px; color: var(--text-dim); margin-top: 4px; }

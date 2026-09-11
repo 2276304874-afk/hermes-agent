@@ -266,15 +266,79 @@
       addKbCards(query, null, e.message);
     }
   }
+  /* ---------- T2 执行轨迹（Trajectory） ----------
+   * 本地模型一轮里有 10~20 秒是纯等待（system prompt prefill），此前界面只有一句
+   * 「思考中…」，用户无法判断是在干活还是卡死。这里把已观测到的事件映射成阶段，
+   * 并对**当前阶段实时跳秒**：把无从判断的等待变成看得见的进展。
+   *
+   * 设计约束（务必遵守）：
+   *   ① 阶段是对 Hermes 内部状态的**推测性映射**，文案不得谎称精确 —— 不显示百分比，
+   *      不预测剩余时间（本地推理耗时受 prompt 长度影响极大，任何预测都会失准）。
+   *   ② 只增不改：不动 createRunPanel 之外的结构，也不接管 tool-timeline / reason 的渲染。
+   *   ③ 计时器必须随本轮结束清理，否则快速多轮会泄漏 interval。
+   */
+  const TRAJ_STEPS = [
+    ['ready', '建立连接'],
+    ['session', '准备上下文'],
+    ['think', '模型推理'],
+  ];
+
   function createRunPanel() {
     const msg = document.createElement('div'); msg.className = 'msg bot';
-    const run = document.createElement('div'); run.className = 'run';
-    run.innerHTML = '<span class="thinking">思考中<span class="dots"></span></span><div class="tool-timeline"></div><div class="answer"></div>';
+    const run = document.createElement('div'); run.className = 'run has-traj';
+    run.innerHTML = '<div class="traj">'
+      + TRAJ_STEPS.map((s, i) => '<div class="traj-step' + (i === 0 ? ' running' : '') + '" data-step="' + s[0] + '">'
+        + '<i class="traj-ic"></i><span class="traj-lb">' + s[1] + '</span><b class="traj-t">—</b></div>').join('')
+      + '</div><span class="thinking">思考中<span class="dots"></span></span><div class="tool-timeline"></div><div class="answer"></div>';
     msg.innerHTML = '<div class="avatar">H</div><div class="bubble"></div>';
     msg.querySelector('.bubble').appendChild(run);
     messagesEl.appendChild(msg); scrollDown();
+
+    run._trajT0 = Date.now();
+    // 100ms 刷新：肉眼足够连贯，又不至于频繁重排
+    run._trajTimer = setInterval(() => {
+      const cur = run.querySelector('.traj-step.running .traj-t');
+      if (cur) cur.textContent = fmtSec(Date.now() - run._trajT0);
+    }, 100);
     return run;
   }
+
+  /** 推进到指定阶段：其之前的全部标记完成，目标阶段开工并开始跳秒。被调用多次也幂等。 */
+  function trajAdvance(run, step) {
+    if (!run || !run.isConnected) return;
+    const now = Date.now();
+    const elapsed = fmtSec(now - (run._trajT0 || now));
+    const rows = [...run.querySelectorAll('.traj-step')];
+    let seen = false;
+    for (const r of rows) {
+      if (r.dataset.step === step) { seen = true; break; }
+      r.classList.remove('running'); r.classList.add('done');
+      const t = r.querySelector('.traj-t');
+      if (t && t.textContent === '—') t.textContent = elapsed;
+    }
+    if (!seen) return;                     // 未知阶段：不制造没观测到的假象
+    const target = rows.find(r => r.dataset.step === step);
+    target.classList.add('running');
+    const tt = target.querySelector('.traj-t');
+    if (tt) tt.textContent = elapsed;
+  }
+
+  /** 本轮收尾：停表并把未完成的阶段标记为已完成（中断/完成都不该留一个卡住的转圈）。 */
+  function trajFinish(run, ok) {
+    if (!run) return;
+    if (run._trajTimer) { clearInterval(run._trajTimer); run._trajTimer = null; }
+    const elapsed = fmtSec(Date.now() - (run._trajT0 || Date.now()));
+    for (const r of run.querySelectorAll('.traj-step')) {
+      const t = r.querySelector('.traj-t');
+      if (r.classList.contains('running')) {
+        r.classList.remove('running');
+        r.classList.add(ok === false ? 'aborted' : 'done');
+        if (t) t.textContent = elapsed;
+      } else if (t && t.textContent === '—') t.textContent = '—';
+    }
+  }
+
+  function fmtSec(ms) { return (Math.max(0, ms) / 1000).toFixed(1) + 's'; }
   function hideThinking(run) { const t = run.querySelector('.thinking'); if (t) t.style.display = 'none'; }
   // C3: 把模型 reasoning（深度思考）渲染成可折叠块，插在 tool-timeline 之前
   // B7: 快速模式下新块默认折叠（chatMode==='fast' 时只收一条），思考模式默认展开
@@ -605,6 +669,10 @@
     }
     for (const r of runs) {
       hideThinking(r);
+      // 历史回放不该出现「实时进度」：createRunPanel 起的表要停掉，面板本身也移除，
+      // 否则载入旧会话会看到一个永远不动（或一直跳秒）的进度条。
+      trajFinish(r);
+      const tr = r.querySelector('.traj'); if (tr) tr.remove();
       for (const card of r.querySelectorAll('.tool-card.pending')) card.remove();
       appendBotActs(r);
     }
@@ -1349,12 +1417,17 @@
           ? '⚠️ 危险命令放行已开启：本会话 ' + obj.bypassTtlMin + ' 分钟内生效，到期自动恢复拦截'
           : '⚠️ 危险命令放行已开启（仅本轮有效）', 'cloud');
       }
+      // T2 轨迹：连接已建立 → 进入「准备上下文」阶段（实测这段通常 <100ms）
+      trajAdvance(currentRunEl, 'session');
       updateHint();
     }
     else if (ev === 'session') {
       sessionId = obj.sessionId;
       if (activeWs && !wsAssign[sessionId]) { wsAssign[sessionId] = activeWs; renderWsBar(); }   // 乐观更新，省一次拉取
       if (activeWs) setConvMeta(activeWs);
+      // T2 轨迹：会话就绪 → 进入「模型推理」。这是真正的大头（system prompt prefill），
+      // 也是用户原先唯一感知到的那段空白，必须让其可见。
+      trajAdvance(currentRunEl, 'think');
       updateHint(); loadSessions();
     }
     else if (ev === 'notice') { addNote('☁️ ' + obj.message, 'cloud'); }
@@ -1364,6 +1437,7 @@
       if (tokenIgnore) return;          // 最终回答已渲染，忽略迟到增量
       liveText += obj.text || '';
       hideThinking(currentRunEl);
+      trajFinish(currentRunEl);          // T2 轨迹：首字已出，「模型推理」阶段完成并停表
       scheduleLiveRender();
     }
     else if (ev === 'msg') {
@@ -1389,6 +1463,7 @@
       }
     }
     else if (ev === 'done') {
+      trajFinish(currentRunEl);          // T2 轨迹：收尾停表（幂等，可能已在首 token 处完成）
       sessionId = obj.sessionId; curStats = obj; setBusy(false); updateHint(); loadSessions(); refreshStatus();
       appendBotActs(currentRunEl);
       const ansEl = currentRunEl && currentRunEl.querySelector('.answer');
@@ -1397,7 +1472,7 @@
       currentRunId = null; currentRunEl = null; scrollDown();
       maybeSuggest(answerText);          // 豆包式"为你推荐"：后台生成追问磁贴
     }
-    else if (ev === 'error') { if (currentRunEl) setAnswer(currentRunEl, '出错: ' + escapeHtml(obj.message)); setBusy(false); currentRunId = null; currentRunEl = null; }
+    else if (ev === 'error') { trajFinish(currentRunEl, false); if (currentRunEl) setAnswer(currentRunEl, '出错: ' + escapeHtml(obj.message)); setBusy(false); currentRunId = null; currentRunEl = null; }
   }
 
   // C4: 图片上传（gemma4 识别闭环）
@@ -1553,6 +1628,8 @@
       return;
     }
     if (busy) {
+      // 用户主动中断：轨迹要按「已中止」收尾，不能留一个永远转圈的阶段
+      trajFinish(currentRunEl, false);
       try { await apiFetch('/api/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ runId: currentRunId, sessionId }) }); } catch (e) { softFail('请求停止本轮', e); }   // 尽力而为：真正的兜底是断开 SSE
       return;
     }

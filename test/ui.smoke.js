@@ -338,6 +338,57 @@ const CONSOLE_WHITELIST = [
       modeProbe.labels.join(' / ')
     );
 
+    /* ---------- L8 执行轨迹（Trajectory） ----------
+     * 本地模型一轮有 10~20s 纯等待。用 mock SSE 把事件流固定下来，
+     * 断言 Phase 面板能按事件推进并给出耗时 —— 这是「等待可见」的关键手段。
+     * 必须 mock 真实模型调用：否则用例耗时会跟着模型走，测试不可重复。 */
+    await page.route('**/api/chat', route => route.fulfill({
+      status: 200,
+      contentType: 'text/event-stream',
+      body: [
+        'event: ready\ndata: {"runId":"r-ui-probe","sessionId":"api_1789152458_78429320"}\n\n',
+        'event: session\ndata: {"sessionId":"api_1789152458_78429320"}\n\n',
+        'event: token\ndata: {"text":"你好"}\n\n',
+        'event: done\ndata: {"elapsed":12.3,"sessionId":"api_1789152458_78429320"}\n\n',
+      ].join(''),
+    }));
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(1200);
+    await page.fill('#input', '只回复两个字：你好');
+    await page.click('#sendBtn');
+    await page.waitForTimeout(1500);
+
+    const traj = await page.evaluate(() => {
+      const box = document.querySelector('.run .traj');
+      if (!box) return { missing: true };
+      const rows = [...box.querySelectorAll('.traj-step')].map(r => ({
+        step: r.dataset.step,
+        state: r.classList.contains('done') ? 'done'
+          : r.classList.contains('aborted') ? 'aborted'
+            : r.classList.contains('running') ? 'running' : 'pending',
+        time: (r.querySelector('.traj-t') || {}).textContent || '',
+      }));
+      // has-traj 时「思考中…」必须让位，否则同一信息显示两遍
+      const th = document.querySelector('.run.has-traj .thinking');
+      const thinkingHidden = th ? getComputedStyle(th).display === 'none' : true;
+      return { missing: false, rows, thinkingHidden };
+    });
+
+    check(traj.missing === false, 'Trajectory 面板已渲染', String(traj.missing));
+    check((traj.rows || []).length === 3, '轨迹为「建立连接/准备上下文/模型推理」三段', String((traj.rows || []).length));
+    check(
+      (traj.rows || []).every(r => r.state === 'done'),
+      '本轮结束后各阶段均标记为已完成（不留卡住的转圈）',
+      (traj.rows || []).map(r => `${r.step}:${r.state}`).join(' ')
+    );
+    check(
+      (traj.rows || []).every(r => /^\d+\.\d+s$/.test(r.time)),
+      '每阶段都给出实测耗时（秒）',
+      (traj.rows || []).map(r => r.time).join(' / ')
+    );
+    check(traj.thinkingHidden === true, 'has-traj 时隐藏「思考中…」占位（避免信息重复）', String(traj.thinkingHidden));
+    await page.unroute('**/api/chat');
+
     /* ---------- 截图存档 ---------- */
     try {
       await page.screenshot({ path: SHOT, fullPage: false });
