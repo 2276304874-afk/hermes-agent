@@ -389,6 +389,24 @@ const CONSOLE_WHITELIST = [
     check(traj.thinkingHidden === true, 'has-traj 时隐藏「思考中…」占位（避免信息重复）', String(traj.thinkingHidden));
     await page.unroute('**/api/chat');
 
+    /* ---------- L9 优化提示词按钮 ---------- */
+    const optBtn = await page.$('#optimizeBtn');
+    check(optBtn !== null, '优化提示词按钮存在', String(!!optBtn));
+    if (optBtn) {
+      const title = await optBtn.getAttribute('title') || '';
+      check(title.includes('优化'), '按钮 title 含"优化"', title.slice(0, 60));
+      // 确认按钮在 modeSeg 之后、modelSelect 之前
+      const html = await page.evaluate(() => {
+        const btn = document.getElementById('optimizeBtn');
+        if (!btn) return null;
+        const prev = btn.previousElementSibling;
+        const next = btn.nextElementSibling;
+        return { prevId: prev?.id, nextId: next?.id };
+      });
+      check(html && html.prevId === 'modeSeg', '按钮位置：在 modeSeg 之后', html?.prevId);
+      check(html && html.nextId === 'modelSelect', '按钮位置：在 modelSelect 之前', html?.nextId);
+    }
+
     /* ---------- 截图存档 ---------- */
     try {
       await page.screenshot({ path: SHOT, fullPage: false });

@@ -191,6 +191,9 @@
   .box-bar .mic-btn { width: 36px; height: 36px; background: transparent; border-color: transparent; }
   .box-bar .mic-btn:hover { border-color: var(--border); }
   .box-bar .mic-btn.on { background: var(--danger); border-color: var(--danger); }
+  /* 优化提示词按钮：运行中转圈 */
+  #optimizeBtn.running { animation: opt-spin 1s linear infinite; pointer-events: none; opacity: .7; }
+  @keyframes opt-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
   /* 卡内模型选择：文字态（贴工作台风格），悬停加深 */
   .box-bar select { background: transparent; color: var(--text-dim); border: 1px solid transparent; border-radius: 8px; padding: 6px 4px; font-size: 12.5px; cursor: pointer; max-width: 240px; }
   .box-bar select:hover { color: var(--text); border-color: var(--border); }

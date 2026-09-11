@@ -1766,6 +1766,37 @@
       : '工作区内修改已关闭', wsModOn ? 'cloud' : '');
     updateHint();
   };
+  // 提示词优化按钮：调用本地模型改写输入框文本，结果可确认/可回退
+  const optimizeBtnEl = $('optimizeBtn');
+  if (optimizeBtnEl) optimizeBtnEl.onclick = async () => {
+    const text = inputEl.value.trim();
+    if (!text) { updateHint('请先输入要优化的文本'); return; }
+    if (busy) { updateHint('对话进行中，请稍后再试'); return; }
+    optimizeBtnEl.disabled = true;
+    optimizeBtnEl.classList.add('running');
+    const orig = inputEl.value;
+    updateHint('✨ 正在优化提示词…');
+    try {
+      const r = await apiFetch('/api/optimize', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text })
+      });
+      const d = await r.json();
+      if (r.ok && d.text) {
+        inputEl.value = d.text;
+        inputEl.style.height = 'auto';
+        inputEl.dispatchEvent(new Event('input')); // 触发 auto-resize
+        updateHint('✅ 提示词已优化（可继续编辑或直接发送）');
+      } else {
+        updateHint('⚠️ 优化失败: ' + (d.error || '未知错误'));
+      }
+    } catch (e) {
+      updateHint('⚠️ 优化请求失败: ' + e.message);
+    } finally {
+      optimizeBtnEl.disabled = false;
+      optimizeBtnEl.classList.remove('running');
+    }
+  };
   // 移动端适配：≤720px 侧栏变抽屉 + 遮罩；桌面端行为不变（.hidden 控制收合）
   const backdrop = $('backdrop');
   const isMobile = () => window.innerWidth <= 720;

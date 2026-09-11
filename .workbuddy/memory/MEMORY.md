@@ -22,6 +22,20 @@
 - `com.hermes-agent.ui` 与 `com.hermes-agent.gateway` **均已 launchd 注册且 running**(此前"gateway 未注册"的待办已解决):UI pid→4173、gateway pid 2971→8642,均与端口监听一致。Ollama 11434 在跑,模型常驻。
 - 测试基线(全绿):`npm test` **101** / `smoke` **51** / `ui` **38** / `health` **21** / `test:safety` **6** / `stop.smoke` **9** / `test:chat` **6**。
 
+## 技能加载机制(2026-09-12 实测)★★
+- **Hermes 已是渐进式加载(progressive disclosure),勿重复造"按需加载"轮子**。
+  `~/.hermes/hermes-agent/agent/prompt_builder.py:1183 build_skills_system_prompt()`
+  docstring 原文 "Compact skill index for the system prompt";`_render_skills_index()`
+  只注入 `- name: description` 索引,全文靠 **skill_view(name)** 命中后读(tools/skills_tool.py,
+  重复加载由 skills_tool_dedup.py 去重;已有 compact_categories 降级 + `[SKILL_PRUNED]` 重载)。
+- 量化:`~/.hermes/skills` 磁盘 **43.8MB / 192 个叶子技能**(顶层目录 100)→ 其中 SKILL.md 正文
+  仅 **0.91MB**,97.9% 是脚本/LaTeX/pdf 资源**永不进上下文**;实际注入的是 **15,000 字符 ≈ 3,750 token**
+  (占 system prompt 15612 的 **24%**)。每技能成本:索引 ~20 token vs 全量 ~1,250 token ≈ **60:1**。
+- ⚠️ 两条反直觉铁律:① **索引字节一变 ⇒ prompt cache 前缀失效**(实测 cache 100%→6.5s / 97%→34.7s),
+  故任何"动态索引"必须保证字节稳定,否则反向劣化;② 命中率瓶颈是 **description 质量**不是检索算法(模型即路由器)。
+- 孤儿文件 `~/.hermes/.skill_embeddings.json`(853KB,1024 维×66 条)**源码无消费者**、覆盖仅 34.4%,清理候选。
+- 自建检索层的门槛是 **>500 技能**;本机 192,远未到。
+
 ## 性能基线(2026-09-12 02:00,`/api/usage` summary)
 - **avgFirstTokenSec24h ≈ 45.25s**(最大体验痛点)· avgTokPerSec 17.5 · avgElapsed 28.5s · 18 轮全本地 · toolCallsTotal 仅 3。
 - 模型**常驻**(hermes-local-gemma4 3.1GB,expires ~2h)→ **45s 不是推理冷加载**,延迟来自 Hermes agent 侧(createSession / 工具注册 / gateway 编排),需专门打点定位。
