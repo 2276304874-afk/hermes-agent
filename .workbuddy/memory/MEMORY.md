@@ -36,7 +36,7 @@
 - ⚠️ **无远端 tracking 分支**(`git rev-list --left-right origin/main...main` 失败)。`npm run mirror`(REST API,因本机 github.com:443 被阻断)/`npm run backup`(本地 bundle)均**未纳入常规流程**,有单点丢失风险。
 - `lib/` 域模块:config(单一真源,`WORKSPACE=path.resolve(__dirname,'..')`)/state(单例,**禁 new Map**)/http/auth/db/hermes/ollama/cloud/knowledge/skills/maintenance/parse/router/gateway/safety/usage。`lib/routes/*` 39 端点。KB 检索逻辑=`lib/knowledge.js`(非 kb.js)。
 - 前端三不变量:①head 内联主题+版本戳(不可外移);②`/app.js` 在 body 末不加 defer/async;③不改 ES module。`npm run check` 覆盖全部。
-- **测试五步曲**:`npm test`(69)/`npm run smoke`(51 路由)/`npm run ui`(浏览器 30)/`npm run health`(21),全绿后 `git commit`。⚠️ 本机 `node --test` 须写 `node --test test/*.test.js`(目录被当模块路径)。
+- **测试七张网**(全绿才可 `git commit`):`npm test`(node:test,101)/`npm run smoke`(路由 51)/`npm run ui`(浏览器 38)/`npm run health`(21)/`npm run test:safety`(hook 6)/`npm run test:stop`(9)/`npm run test:chat`(契约 6)。⚠️ 本机 `node --test` 须写 `node --test test/*.test.js`(目录被当模块路径)。
 
 ## 模型与 Ollama
 - 主模型 `hermes-local-gemma4`(base gemma4:e4b,128K ctx)。⚠️ 工具型 agent 勿关 CoT:仅 `reasoning_effort:"none"` 生效,`think:false` 被忽略;关后小模型只说不做→记忆假死。
