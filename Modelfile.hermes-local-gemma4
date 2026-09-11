@@ -1,0 +1,25 @@
+# 赫尔墨斯特工 · 本地主模型（gemma4:e4b）
+# 2026-09-10 换装：qwen3.5:9b → gemma4:e4b
+#   gemma4 原生支持 function calling + system role + 视觉 + 音频，一个模型顶掉
+#   旧的「对话模型 + llava 视觉模型」两套，视觉与推理不再互相换载。
+#
+# 为什么必须派生（不能直接用 gemma4:e4b）：
+#   本机 16GB < Ollama 的 24GiB 阈值，Ollama 在低显存机器上默认 num_ctx=4096。
+#   agent 上下文（系统提示 + 工具定义 + 会话历史）瞬间溢出 → 模型丢失工具指令，
+#   把 JSON 当文本吐（"cosplay 工具调用"）。必须固定 num_ctx=16384 才可用。
+#   （Hermes 侧 extra_body.num_ctx 也会设，双保险。）
+#
+# 为什么不覆盖 TEMPLATE：
+#   gemma4 原生支持 system role 与 function calling，Ollama 内置 chat template
+#   已正确处理工具/系统消息。覆盖 TEMPLATE 反而会破坏工具调用（qwen 模板不适用）。
+#
+# thinking：默认关闭。开启方式 = 在 system prompt 开头注入 <|think|> 令牌。
+#   Hermes 当前不注入 → 即关闭状态。agent 工具场景需要确定性与速度，故保持关闭。
+
+FROM gemma4:e4b
+
+PARAMETER num_ctx 16384
+PARAMETER temperature 0.6
+PARAMETER top_p 0.95
+PARAMETER top_k 64
+PARAMETER num_predict 4096

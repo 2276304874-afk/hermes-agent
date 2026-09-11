@@ -1,0 +1,61 @@
+# ============================================================
+# 赫尔墨斯特工 · git 忽略清单
+# 原则：只忽略「可重建的机器状态」与「系统垃圾」；
+#       源码、配置真源、知识库内容(kb_inbox/kb_distilled)、记忆(memory/) 一律入库。
+# 注意：本项目的密钥/令牌都不在工作区（在 ~/.hermes/），下面是兜底。
+# ============================================================
+
+# ---- 系统垃圾 ----
+.DS_Store
+**/.DS_Store
+Thumbs.db
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# ---- 依赖与构建产物 ----
+node_modules/
+dist/
+build/
+*.log
+
+# ---- 机器生成/可重建的运行态（重点）----
+# kb.db = FTS5 索引，可随时由 kb_inbox.md / kb_distilled.md 重建
+.workbuddy/kb.db
+.workbuddy/kb.db-shm
+.workbuddy/kb.db-wal
+# 增量捕获/蒸馏游标：换机后重建无害
+.workbuddy/kb_capture_state.json
+.workbuddy/kb_distill_state.json
+# 临时区（含 server.py.bak-* 之类的编辑器/工具备份）
+.workbuddy/tmp/
+
+# ---- 各类 agent 工具的运行态目录 ----
+.mimosa/
+.v2c/
+.video_agent/
+.zcode/
+
+# ---- 备份/临时文件 ----
+*.bak-*
+*.bak.*
+*.orig
+*.rej
+*.tmp
+*.swp
+*~
+
+# ---- 密钥兜底（正常不在此目录）----
+.env
+.env.*
+*.key
+*.pem
+credentials.json
+
+# ---- 运行时日志 ----
+*.out.log
+*.err.log

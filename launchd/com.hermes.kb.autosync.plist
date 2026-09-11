@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 赫尔墨斯特工 知识库自动同步：每 30 分钟捕获新会话并蒸馏成技能。安装需在本机 Terminal 执行（WorkBuddy 的 shell 无法 bootstrap launchd）。 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes.kb.autosync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工/kb/sync.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工</string>
+  <key>StartInterval</key>
+  <integer>1800</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/zhaocaozheng/.hermes/kb-sync.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/zhaocaozheng/.hermes/kb-sync.err.log</string>
+</dict>
+</plist>

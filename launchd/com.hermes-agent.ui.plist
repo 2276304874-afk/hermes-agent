@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- HOST 收紧为 127.0.0.1（2026-09-11）：令牌是静态 Bearer，暴露局域网等于把钥匙挂门外。
+     要手机/其他设备访问改回 0.0.0.0。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes-agent.ui</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>/Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工/run.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PORT</key>
+    <string>4173</string>
+    <key>HOST</key>
+    <string>127.0.0.1</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>/Users/zhaocaozheng/Library/Logs/hermes-ui.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/zhaocaozheng/Library/Logs/hermes-ui.err.log</string>
+</dict>
+</plist>

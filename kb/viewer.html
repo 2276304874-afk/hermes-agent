@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>赫尔墨斯特工 · 知识库</title>
+<style>
+  :root { --bg:#f6f7f9; --panel:#fff; --bd:#e4e7eb; --fg:#1f2329; --mut:#8a909a;
+          --accent:#2f6fef; --accent-soft:#eef3ff; --badge:#eef2ff; --badgefg:#2f6fef;
+          --ok:#1faa59; --bad:#e0524d; }
+  * { box-sizing:border-box; }
+  html,body { height:100%; margin:0; }
+  body { font:14px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif;
+         background:var(--bg); color:var(--fg); display:flex; flex-direction:column; }
+  .app { flex:1; display:flex; min-height:0; }
+  /* 左侧导航 */
+  .side { width:228px; flex:none; background:var(--panel); border-right:1px solid var(--bd);
+          display:flex; flex-direction:column; padding:18px 14px; }
+  .brand { font-size:15px; font-weight:700; padding:4px 8px 16px; }
+  .brand small { display:block; font-size:11px; font-weight:400; color:var(--mut); margin-top:2px; }
+  .nav { display:flex; flex-direction:column; gap:4px; }
+  .nav button { display:flex; align-items:center; gap:10px; width:100%; text-align:left;
+                padding:10px 12px; border:0; border-radius:9px; background:transparent;
+                color:var(--fg); font-size:14px; cursor:pointer; }
+  .nav button:hover { background:var(--bg); }
+  .nav button.active { background:var(--accent-soft); color:var(--accent); font-weight:600; }
+  .nav .ico { width:18px; height:18px; flex:none; color:currentColor; }
+  .nav .cnt { margin-left:auto; font-size:12px; color:var(--mut); background:var(--bg);
+              border-radius:999px; padding:1px 9px; }
+  .nav button.active .cnt { color:var(--accent); background:#fff; }
+  .side-foot { margin-top:auto; font-size:11px; color:var(--mut); padding:8px; line-height:1.7; }
+  /* 中间内容 */
+  .main { flex:1; display:flex; flex-direction:column; min-width:0; }
+  .topbar { padding:14px 22px; border-bottom:1px solid var(--bd); background:var(--panel); }
+  .topbar h2 { margin:0; font-size:16px; }
+  .topbar .desc { color:var(--mut); font-size:12px; margin-top:3px; }
+  .search-row { display:flex; gap:10px; margin-top:12px; }
+  .search-row input { flex:1; padding:10px 12px; border:1px solid var(--bd); border-radius:8px;
+                      font-size:14px; background:var(--panel); color:var(--fg); }
+  .search-row button { padding:10px 16px; border:0; border-radius:8px; background:var(--accent);
+                       color:#fff; cursor:pointer; }
+  .cards { flex:1; overflow-y:auto; padding:18px 22px 28px; }
+  .card { background:var(--panel); border:1px solid var(--bd); border-radius:11px;
+          padding:14px 16px; margin-bottom:12px; }
+  .card .meta { display:flex; align-items:center; gap:8px; margin-bottom:7px; flex-wrap:wrap; }
+  .badge { font-size:12px; padding:2px 9px; border-radius:7px; background:var(--badge);
+           color:var(--badgefg); font-weight:600; }
+  .src { font-size:11px; color:var(--mut); word-break:break-all; }
+  .score { font-size:11px; color:var(--mut); margin-left:auto; }
+  .txt { white-space:pre-wrap; word-break:break-word; color:#2b3038; }
+  .empty { color:var(--mut); text-align:center; padding:48px 0; }
+  .loading { color:var(--mut); text-align:center; padding:48px 0; }
+  /* 底部状态栏 */
+  .statusbar { height:40px; flex:none; border-top:1px solid var(--bd); background:var(--panel);
+               display:flex; align-items:center; gap:22px; padding:0 22px; font-size:12px; color:var(--mut); }
+  .statusbar .item { display:flex; align-items:center; gap:7px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--mut); }
+  .dot.ok { background:var(--ok); }
+  .dot.bad { background:var(--bad); }
+  .statusbar .sp { margin-left:auto; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="side">
+    <div class="brand">赫尔墨斯特工<small>本地知识库 · 只读</small></div>
+    <nav class="nav" id="nav">
+      <button data-cat="all" class="active">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="4" width="7" height="7" rx="1.6"/><rect x="13.5" y="4" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/></svg>
+        全部 <span class="cnt" id="cnt-all">0</span>
+      </button>
+      <button data-cat="inbox">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 13.5 7 5h10l3.5 8.5"/><path d="M3.5 13.5V19a1.5 1.5 0 0 0 1.5 1.5h14a1.5 1.5 0 0 0 1.5-1.5v-5.5"/><path d="M3.5 13.5h5a2 2 0 0 0 2 2h3a2 2 0 0 0 2-2h5"/></svg>
+        捕获 <span class="cnt" id="cnt-inbox">0</span>
+      </button>
+      <button data-cat="distilled">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3h6"/><path d="M10 3v6L5 18a2 2 0 0 0 1.8 3h10.4A2 2 0 0 0 19 18l-5-9V3"/></svg>
+        蒸馏 <span class="cnt" id="cnt-distilled">0</span>
+      </button>
+      <button data-cat="memory">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 4v16M16 4v16M4 12h16"/></svg>
+        记忆 <span class="cnt" id="cnt-memory">0</span>
+      </button>
+      <button data-cat="search">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><line x1="20" y1="20" x2="15.5" y2="15.5"/></svg>
+        搜索
+      </button>
+    </nav>
+    <div class="side-foot" id="sideFoot">本地离线 · 不触网<br>集成于主服务 4173（/kb）</div>
+  </aside>
+
+  <main class="main">
+    <div class="topbar">
+      <h2 id="title">全部条目</h2>
+      <div class="desc" id="desc">捕获片段 / 蒸馏技能 / 长期记忆 · 复用 recall 语义检索</div>
+      <div class="search-row" id="searchRow" style="display:none">
+        <input id="q" placeholder="搜索知识库，如：首字延迟 / launchd / 网页抓取" onkeydown="if(event.key==='Enter')go()">
+        <button onclick="go()">搜索</button>
+      </div>
+    </div>
+    <div class="cards" id="list"></div>
+    <div class="statusbar">
+      <div class="item"><span class="dot" id="idxDot"></span><span id="idxTxt">索引状态：…</span></div>
+      <div class="item"><span class="dot" id="svcDot"></span><span id="svcTxt">模型/服务：检测中…</span></div>
+      <div class="sp" id="lastSync">—</div>
+    </div>
+  </main>
+</div>
+<script>
+const TITLES = { all:'全部条目', inbox:'捕获片段', distilled:'蒸馏技能', memory:'长期记忆', search:'搜索结果' };
+const DESCS = {
+  all:'捕获片段 / 蒸馏技能 / 长期记忆 一览',
+  inbox:'运维中自动捕获的可复用经验片段（.workbuddy/kb_inbox.md）',
+  distilled:'由本地模型蒸馏压缩成的结构化技能（kb_distilled.md）',
+  memory:'项目级与用户级长期记忆（MEMORY.md）',
+  search:'输入关键词走 FTS5 滑动三元组检索 + BM25 排序'
+};
+let curCat = 'all';
+const esc = s => (s||'').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+document.querySelectorAll('#nav button').forEach(b => b.onclick = () => {
+  document.querySelectorAll('#nav button').forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  curCat = b.dataset.cat;
+  document.getElementById('title').textContent = TITLES[curCat];
+  document.getElementById('desc').textContent = DESCS[curCat];
+  document.getElementById('searchRow').style.display = (curCat === 'search') ? 'flex' : 'none';
+  go();
+});
+
+async function go(){
+  const list = document.getElementById('list');
+  list.innerHTML = '<div class="loading">加载中…</div>';
+  const q = document.getElementById('q').value.trim();
+  let url = (curCat === 'search' && q)
+    ? '/api/kb/search?q=' + encodeURIComponent(q)
+    : '/api/kb/list?cat=' + curCat;
+  try {
+    const r = await fetch(url);
+    const data = await r.json();
+    if (!data.length) { list.innerHTML = '<div class="empty">暂无内容</div>'; return; }
+    list.innerHTML = data.map(e => `
+      <div class="card">
+        <div class="meta">
+          <span class="badge">${esc(e.type||e.cat)}</span>
+          <span class="src">${esc(e.src||'')}</span>
+          ${e.score!=null?`<span class="score">相关度 ${(e.score||0).toFixed(2)}</span>`:''}
+        </div>
+        <div class="txt">${esc(e.text)}</div>
+      </div>`).join('');
+    const t = document.getElementById('title');
+    if (curCat === 'search') t.textContent = `搜索结果（${data.length}）`;
+  } catch(e){ list.innerHTML = '<div class="empty">加载失败：'+esc(e.message)+'</div>'; }
+}
+
+async function refreshStatus(){
+  try {
+    const r = await fetch('/api/kb/status');
+    const s = await r.json();
+    document.getElementById('cnt-all').textContent = s.total||0;
+    document.getElementById('cnt-inbox').textContent = (s.counts&&s.counts.inbox)||0;
+    document.getElementById('cnt-distilled').textContent = (s.counts&&s.counts.distilled)||0;
+    document.getElementById('cnt-memory').textContent = (s.counts&&s.counts.memory)||0;
+    // 索引状态
+    const idxDot = document.getElementById('idxDot'), idxTxt = document.getElementById('idxTxt');
+    const total = s.total||0;
+    if (total > 0){ idxDot.className='dot ok'; idxTxt.textContent = `索引状态：已索引 ${total} 条`; }
+    else { idxDot.className='dot'; idxTxt.textContent = '索引状态：空'; }
+    // 模型/服务状态
+    const svcDot = document.getElementById('svcDot'), svcTxt = document.getElementById('svcTxt');
+    if (s.ollama && s.ollama.running){
+      svcDot.className='dot ok';
+      const names = (s.ollama.models||[]).slice(0,3).join('、');
+      svcTxt.textContent = '模型/服务：Ollama 在线' + (names?(' · '+names+(s.ollama.models.length>3?'…':'')):'');
+    } else {
+      svcDot.className='dot bad';
+      svcTxt.textContent = '模型/服务：Ollama 离线';
+    }
+    document.getElementById('lastSync').textContent = '端口 ' + (s.kb_port||'4174');
+  } catch(e){
+    document.getElementById('idxTxt').textContent = '索引状态：获取失败';
+    document.getElementById('svcTxt').textContent = '模型/服务：获取失败';
+  }
+}
+
+go();
+refreshStatus();
+setInterval(refreshStatus, 30000);
+</script>
+</body>
+</html>

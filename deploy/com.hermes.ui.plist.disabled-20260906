@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  赫尔墨斯特工 UI · launchd 托管
+  安装（工作区根目录执行）：
+    launchctl bootout  gui/$(id -u) ~/Library/LaunchAgents/com.hermes.ui.plist 2>/dev/null
+    mkdir -p ~/Library/LaunchAgents
+    cp deploy/com.hermes.ui.plist ~/Library/LaunchAgents/com.hermes.ui.plist
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.hermes.ui.plist
+  卸载：
+    launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.hermes.ui.plist
+  效果：登录自启 + 崩溃 10 秒内自动重启。日志 /tmp/hermes-ui-launchd.{log,err.log}
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes.ui</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/node</string>
+    <string>/Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工/server.js</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/tmp/hermes-ui-launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/hermes-ui-launchd.err.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>HOME</key>
+    <string>/Users/zhaocaozheng</string>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/sbin:/usr/sbin</string>
+  </dict>
+</dict>
+</plist>

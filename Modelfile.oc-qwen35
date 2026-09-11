@@ -1,0 +1,6 @@
+# OpenCode 用：qwen3.5:9b + 大上下文
+# 关键：Ollama 默认 num_ctx=4096，agent 回合(system+工具定义+文件)瞬间溢出，
+# 模型会"cosplay 工具调用"(把 JSON 当文本输出)而非真实执行。16384 起步可用。
+FROM qwen3.5:9b
+PARAMETER num_ctx 16384
+PARAMETER temperature 0.4

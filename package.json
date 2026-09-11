@@ -1,0 +1,9 @@
+{
+  "name": "hermes-agent-ui",
+  "version": "1.0.0",
+  "description": "赫尔墨斯特工 Web UI - 本地 Hermes Agent 聊天前端",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  }
+}
