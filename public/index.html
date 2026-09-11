@@ -3,14 +3,17 @@
   赫尔墨斯特工 · Web 前端（单文件应用，无框架无构建）
   ─────────────────────────────────────────────────────
   结构导览（自上而下）：
-    1. <style>     全部样式：主题 CSS 变量(暗/亮) → 布局 → 各组件 → 移动端适配
+    1. <style>→app.css（外置）  全部样式：主题 CSS 变量(暗/亮) → 布局 → 各组件 → 移动端适配
     2. <body> 静态骨架：
-       header（侧栏开关/标题/模式开关/模型下拉/主题/工具箱/设置/新对话）
-       layout = aside 侧栏(历史会话搜索+分组) + main(消息流 + composer 输入条)
+       header（侧栏开关/标题/主题/工具箱/设置/知识库/新对话）
+       layout = aside 侧栏(新会话按钮+历史会话搜索+分组+状态底栏[模型状态/用量/设置])
+                + main(消息流[空态=Hero 引导页] + composer 输入条[输入行+工具行:模式/模型])
        + 各模态框：登录(令牌) / 危险操作审批 / 云端API设置 / L5工具箱(MCP·定时·技能·记忆)
     3. <script> ① head：主题初始化（防闪烁）+ 页面版本戳（配合浏览器缓存提示条）
               ② body 末尾主脚本：Token 认证 → SSE 聊天主循环(send/handleFrame)
                  → Markdown 渲染/代码高亮 → 会话管理 → 工具箱 → 图片/文件/语音输入
+  工作台改版（2026-09-12）：模式切换与模型选择从 header 移入 composer 工具行（.composer-bar），
+  按 id 移动元素，app.js 接线不变；侧栏新增新会话按钮(#newChatSide)与设置入口(#sideSettings)。
   与后端的约定：所有请求带 Authorization: Bearer <令牌>；聊天走 /api/chat SSE 流。
 -->
 <html lang="zh-CN">
@@ -42,11 +45,6 @@
     <div class="logo">赫尔墨斯特工 <small>Hermes Local Agent</small></div>
     <div class="spacer"></div>
     <div class="hd-tools">
-      <div class="seg" id="modeSeg" title="对话模式：思考=展示深度思考过程，快速=跳过">
-        <button type="button" data-mode="fast">快速</button>
-        <button type="button" data-mode="think" class="on">思考</button>
-      </div>
-      <select id="modelSelect"></select>
       <button id="themeBtn" class="icon-only" title="切换亮/暗主题"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg></button>
       <button id="toolsBtn" class="icon-only" title="工具箱（MCP / 定时任务 / 技能 / 记忆）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg></button>
       <button id="settingsBtn" class="icon-only" title="云端接口设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><circle cx="9.5" cy="7" r="2.2" fill="var(--bg)"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="14.5" cy="17" r="2.2" fill="var(--bg)"/></svg></button>
@@ -56,12 +54,14 @@
   </header>
   <div class="layout">
     <aside id="sidebar">
+      <button id="newChatSide" class="side-new" title="开启新会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8.5" x2="12" y2="15.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></svg>新会话</button>
       <h3>历史会话</h3>
       <input id="sessSearch" class="sess-search" type="text" placeholder="🔍 搜索会话…" autocomplete="off" />
       <div class="sess-list" id="sessList"></div>
       <div class="side-footer" id="sideFooter">
         <div class="row"><span class="dot" id="ollamaDot"></span><span id="ollamaTxt">检测模型状态中…</span></div>
         <div id="usageList"></div>
+        <div class="row"><button id="sideSettings" class="side-link" type="button" title="云端接口设置"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.5-2.3 1a7 7 0 0 0-2-1.2L14.2 3H9.8l-.4 2.6a7 7 0 0 0-2 1.2l-2.3-1-2 3.5 2 1.5a7 7 0 0 0 0 2.4l-2 1.5 2 3.5 2.3-1a7 7 0 0 0 2 1.2l.4 2.6h4.4l.4-2.6a7 7 0 0 0 2-1.2l2.3 1 2-3.5-2-1.5c.06-.4.1-.8.1-1.2z"/></svg>设置</button></div>
       </div>
     </aside>
     <button id="backdrop" type="button" aria-label="关闭侧栏"></button>
@@ -76,6 +76,14 @@
           <button class="mic-btn" id="micBtn" title="语音输入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.8" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="18" x2="12" y2="21.2"/></svg></button>
           <textarea id="input" rows="1" placeholder="给赫尔墨斯下达指令… (Enter 发送, Shift+Enter 换行)"></textarea>
           <button class="send-btn" id="sendBtn" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5.5"/><polyline points="6.5,11 12,5.5 17.5,11"/></svg></button>
+        </div>
+        <div class="composer-bar">
+          <div class="seg" id="modeSeg" title="对话模式：思考=展示深度思考过程，快速=跳过">
+            <button type="button" data-mode="fast">快速</button>
+            <button type="button" data-mode="think" class="on">思考</button>
+          </div>
+          <div class="spacer"></div>
+          <select id="modelSelect"></select>
         </div>
         <div class="img-preview" id="imgPreview"></div>
         <div class="img-preview" id="filePreview"></div>

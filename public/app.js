@@ -445,10 +445,13 @@
         provKey = $('provKey'), provBase = $('provBase'), provListEl = $('provList');
   let presets = {};
   let selectedProviderId = '';
-  $('settingsBtn').onclick = async () => {
+  async function openSettings() {
     settingsMask.classList.add('show');
     await loadProviderSettings();
-  };
+  }
+  $('settingsBtn').onclick = openSettings;
+  // 工作台改版：侧栏底部设置入口复用同一面板
+  if ($('sideSettings')) $('sideSettings').onclick = openSettings;
   $('settingsClose').onclick = () => settingsMask.classList.remove('show');
   async function loadProviderSettings() {
     try {
@@ -1424,7 +1427,8 @@
     }
   }
 
-  // B5: 新会话空态引导磁贴（参考豆包"有什么我能帮你的吗"）
+  // B5: 新会话空态引导（工作台 Hero 页，2026-09-12 改版：品牌标 + 大标题 + 磁贴）
+  const HERO_MARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13.5 20.5 4l-6 16.5-3-6.5z"/><path d="m11.5 14 9-10"/></svg>';
   const CHIP_PROMPTS = [
     '用 terminal 看看当前工作区有哪些文件，简单介绍下',
     '用 terminal 检查一下 Ollama 服务和本地模型状态',
@@ -1433,7 +1437,8 @@
   ];
   function renderEmptyState() {
     const es = document.createElement('div'); es.className = 'empty-state';
-    es.innerHTML = '<h2>赫尔墨斯特工</h2><p class="sub">本地离线 · 会动手 · 过程可视化 — 给赫尔墨斯下达指令</p><div class="chip-grid"></div>';
+    es.innerHTML = '<div class="hero-mark">' + HERO_MARK + '</div><h2>赫尔墨斯特工</h2>'
+      + '<p class="sub">本地离线 · 会动手 · 过程可视化 — 描述你想构建的内容，或直接下达指令</p><div class="chip-grid"></div>';
     const grid = es.querySelector('.chip-grid');
     for (const q of CHIP_PROMPTS) {
       const c = document.createElement('button'); c.className = 'chip'; c.type = 'button'; c.textContent = q;
@@ -1447,6 +1452,8 @@
 
   sendBtn.onclick = () => send();
   $('newChat').onclick = newChat;
+  // 工作台改版：侧栏顶部新会话按钮与头部「新对话」同逻辑
+  if ($('newChatSide')) $('newChatSide').onclick = newChat;
   // 移动端适配：≤720px 侧栏变抽屉 + 遮罩；桌面端行为不变（.hidden 控制收合）
   const backdrop = $('backdrop');
   const isMobile = () => window.innerWidth <= 720;
