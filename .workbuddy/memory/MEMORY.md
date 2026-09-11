@@ -10,10 +10,21 @@
 
 ## 代码结构与工程化(2026-09-11 起)
 - **已纳入 git**(`main`,身份 `zhaocaozheng@localhost` 仅仓库级,未动全局)。首次提交 `f5d8a7b`,`refactor(parse)` `9f93aa2`。`.gitignore` 忽略 `.workbuddy/kb.db`(FTS5,可重建)、`kb_*_state.json`、`.workbuddy/tmp/`、`.mimosa/ .v2c/ .video_agent/ .zcode/`、`__pycache__`、`*.bak-*`;**kb_inbox.md / kb_distilled.md / memory/ 是内容资产,必须入库**。
-- **分层现状**:`server.js`(1343 行,HTTP 路由+IO) → `lib/parse.js`(177 行,纯解析层,零副作用)。拆分原则:**纯函数外移、路由不动**。
-- **测试**:`test/parse.test.js`(22 例,node:test 零依赖),`npm test`。fixture 必须标 `[真实]`(抄自本机 CLI 实际输出)/`[合成]`(按已知格式构造)。
-  - ⚠️ 本机 node 22.22.2 的 `node --test <目录>` 会被当成模块路径 → 必须写 `node --test test/*.test.js`。
-- **健康自检**:`bash healthcheck.sh`(19 项,退出码 0/1)。改完代码的标准流程 = `npm test` + `healthcheck.sh` + `git commit`。
+- **分层现状**(2026-09-11 第二步后,提交 `7f31a07`):
+  - `server.js` 848 行 —— 只剩 helper 定义 + 启动自检 + **路由装配** + listen。
+  - `lib/router.js`(约 60 行)—— 极简路由表。**刻意保留原语义:顺序遍历、首个命中即处理、前缀匹配**。禁止换成精确匹配路由(会静默改行为,如 /api/health 要吃掉 query string)。
+  - `lib/parse.js`(177 行,纯解析层,零副作用)。
+  - `lib/routes/*.js` 7 个模块:`kb`(公开4+认证1) / `session`(5) / `system`(5) / `provider`(5) / `media`(4) / `chat`(2,含 handleChat) / `toolbox`(13) = **认证 35 + 公开 4 = 39 条,与原 if 链分支数逐条对上**。
+  - `ctx` 显式依赖袋:路由模块只允许用登记在案的东西。**新增 helper 供路由用 → 必须同时加进 ctx,否则运行期 ReferenceError**(踩过:`warnIfParseEmpty` 留在 server.js 供 `runSessionsList` 用,却从 require 里删了)。
+  - 装配顺序即匹配优先级,**改动必须保持**:公开组 → 静态文件 → 认证闸门(`/api/*` 无 token 401) → 认证组 → 兜底 404。`patchState` 必须定义在 ctx 之前(否则 /api/health 踩 const TDZ)。
+  - **下一步(第三步)**:把 helper 按域拆进 lib/ —— config / http(sendJSON,sse,readBody,serveStatic) / auth / hermes(runHermes,hermesEnv,oneshot补丁) / db / ollama(含多模态) / cloud(resolveModel,providerHealth) / kb。拆完 ctx 可退场。
+- **测试三步曲**(改完代码的标准流程):
+  1. `npm test` —— `test/parse.test.js` 22 例,node:test 零依赖。fixture 必须标 `[真实]`(抄自本机 CLI 实际输出)/`[合成]`(按已知格式构造)。
+     - ⚠️ 本机 node 22.22.2 的 `node --test <目录>` 会被当成模块路径 → 必须写 `node --test test/*.test.js`。
+  2. `bash test/routes.smoke.sh` —— **44 项路由清单冒烟**(`npm run smoke`)。判据不是 200 而是**命中**:400/401/404(业务) 都算通过,只有落到兜底 `not found` 才说明路由丢了。全部请求走参数校验分支,**零副作用**(不建 cron/不装技能/不写记忆/不删会话)。支持 `HERMES_TOKEN=x bash test/routes.smoke.sh 4199` 打备用端口。
+  3. `bash healthcheck.sh` —— 19 项服务级自检(`npm run health`),退出码 0/1。
+  最后 `git commit`;需要生效时 `launchctl kickstart -k gui/$(id -u)/com.hermes-agent.ui`。
+- **启动日志可核对项**:`路由登记:公开 N 条 / 认证 M 条`(漏登记立刻可见)、`KB 解释器:<path>`(路径腐烂可见)、`流式补丁:…`(oneshot 自愈状态)。
 
 ## 模型与 Ollama
 - **主模型(2026-09-10 起):`hermes-local-gemma4`**(base `gemma4:e4b`,PLE 稀疏激活,9.6GB 盘 / ~3.3GB 驻留,128K ctx,原生 tools+vision+audio)。**一个模型同时扛对话/工具/视觉/音频**,已不再需要 llava 换载。
@@ -31,7 +42,8 @@
 - **测试期间不并发 curl 其他模型**(单驻留下互抢换载,互相拖死)。
 - **判"功能缺失"前先确认跑的是新代码**:旧实例常占着端口,新代码未重启就测会得假阴性。用 `/api/*` 新路由 404/unauthorized 反推。
 - **plist 里禁止在 `<array>`/`<dict>` 内部写 XML 注释**:`plutil` 能过但 launchd 报 `EX_CONFIG 78`。注释只能放文件头。
-- all./usr/bin 与托管 python 均支持 sqlite FTS5 trigram,故 KB 解释器可安全回退;但仍应动态解析而非硬编码版本目录(见 `resolvePython()` / `kb/sync.sh`)。
+- `/usr/bin/python3` 与托管 python 均支持 sqlite FTS5 trigram,故 KB 解释器可安全回退;但仍应动态解析而非硬编码版本目录(见 `resolvePython()` / `kb/sync.sh`)。
+- **大块结构搬迁用行号切片更稳,别用超长 old_string**:先 `Read` 定位切点 → 断言校验(`assert '目标函数' in head`)→ python 切片拼接 → `git diff --stat` 核对规模 → `node --check`。
 - **写含中文的 bash 脚本:变量引用一律写 `${VAR}`**。写成 `$VAR` 且后面紧跟全角字符(如 `）`、`，`)时,bash 会把那些字节并进变量名,`set -u` 下直接报 `unbound variable`(healthcheck.sh 踩过)。
 - **`grep -c` 无匹配时输出 `0` 但退出码为 1** → 不可写 `F=$(grep -c x f || echo 0)`,会得到 `"0\n0"`。正确写法:`F=$(grep -c x f 2>/dev/null); F="${F:-0}"`。
 
@@ -46,6 +58,7 @@
 - ✅ KB 集成落地(viewer.html 同源化 + `/api/kb/*` + 顶栏入口 + kb-query 技能)。
 - ✅ P2-7 残留脚本归档到 `archive/one-off-fix-scripts-20260911/`;
 - ✅ P2-8 serve.py 标弃用;P2-9 `resolvePython()` + sync.sh 动态解析 + `warnIfParseEmpty` 格式保鲜告警。
-- ✅ **git 建库完成**(2 次提交);**P1-6 测试基线完成**(22 例);**P1-3 第一步完成**(抽出 lib/parse.js)。
-- ⏳ 待办:P0-2 崩溃根因(等复现)、P1-3 继续拆(路由/chat/auth 分模块)、P2-10 KB 认证决策。
+- ✅ **git 建库完成**(3 次提交 `f5d8a7b` → `9f93aa2` → `7f31a07`);**P1-6 测试基线完成**(22 例 + 44 项路由冒烟);**P1-3 第一步完成**(lib/parse.js)、**第二步完成**(lib/router.js + lib/routes/*,server.js 1341→848 行)。
+- ⏳ 待办:**P1-3 第三步**(helper 按域拆 lib/) / P0-2 崩溃根因(等复现) / P2-10 KB 认证决策 / `index.html` 抽 app.js / `parseSkillsList` 死代码待清。
+- 小隐患(未修,不紧急):`POST /api/memory/save` 的「只允许写固定路径」防御是**恒真的死代码**(`which` 三元只可能落在两个常量上),安全性没问题但注释有误导。
 - 改进清单见 `IMPROVEMENT_PLAN.md`;历史路线图见 `UPGRADE_ROADMAP.md` 与 daily logs。
