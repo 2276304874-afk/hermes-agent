@@ -633,6 +633,7 @@
     el.onclick = async () => {
       sessionId = s.id; currentRunId = null; currentRunEl = null;
       setConvTitle(s.title, true);   // 会话视图顶栏：载入历史会话时显示其标题
+      mountComposer(false);          // 输入卡先归位底部，再清空消息区（防被 innerHTML='' 连带销毁）
       if (isMobile()) setSideDrawer(false);   // 手机上选中会话后收起抽屉
       messagesEl.innerHTML = '';
       const note = document.createElement('div'); note.className = 'sysnote';
@@ -1381,7 +1382,8 @@
     lastPrompt = prompt;
     // 会话视图顶栏：新会话首轮即以本条指令为标题（gateway 侧标题同源取自 prompt）
     if (!sessionId) setConvTitle(prompt || (img ? '图片对话' : '新会话'), true);
-    const es0 = messagesEl.querySelector('.empty-state'); if (es0) es0.remove();   // 首条消息前移除空态磁贴
+    const es0 = messagesEl.querySelector('.empty-state');
+    if (es0) { mountComposer(false); es0.remove(); }   // 首条消息：输入卡回底部 + 移除 Hero 空态
     if (promptOverride == null) {
       addUserMsg(prompt || (img ? '📷 附图' : '📄 附文件'), img ? img.dataUrl : null);
       inputEl.value = ''; inputEl.style.height = 'auto';
@@ -1430,7 +1432,7 @@
     }
   }
 
-  // B5: 新会话空态引导（工作台 Hero 页，2026-09-12 改版：品牌标 + 大标题 + 磁贴）
+  // B5: 新会话空态（工作台 Hero 页，第三步：品牌行 + 居中输入卡 + 幽灵磁贴）
   const HERO_MARK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13.5 20.5 4l-6 16.5-3-6.5z"/><path d="m11.5 14 9-10"/></svg>';
   const CHIP_PROMPTS = [
     '用 terminal 看看当前工作区有哪些文件，简单介绍下',
@@ -1440,8 +1442,8 @@
   ];
   function renderEmptyState() {
     const es = document.createElement('div'); es.className = 'empty-state';
-    es.innerHTML = '<div class="hero-mark">' + HERO_MARK + '</div><h2>赫尔墨斯特工</h2>'
-      + '<p class="sub">本地离线 · 会动手 · 过程可视化 — 描述你想构建的内容，或直接下达指令</p><div class="chip-grid"></div>';
+    es.innerHTML = '<div class="hero-row"><div class="hero-mark">' + HERO_MARK + '</div>'
+      + '<h2>赫尔墨斯特工</h2><span class="hero-pill">本地优先</span></div><div class="chip-grid"></div>';
     const grid = es.querySelector('.chip-grid');
     for (const q of CHIP_PROMPTS) {
       const c = document.createElement('button'); c.className = 'chip'; c.type = 'button'; c.textContent = q;
@@ -1449,6 +1451,23 @@
       grid.appendChild(c);
     }
     messagesEl.appendChild(es);
+    mountComposer(true);   // 空态：输入卡上移到 Hero 标题下方（参照工作台布局）
+  }
+
+  // 输入卡挂载位切换：Hero 空态时卡片居中在标题下方，进入会话后回到底部。
+  // DOM 搬移保留事件接线；⚠️ 任何要清空 #messages 的路径必须先 mountComposer(false)，
+  // 否则位于 .empty-state 内的输入卡会被连带 innerHTML='' 销毁（事件接线全灭）。
+  function mountComposer(inHero) {
+    const comp = document.getElementById('composer');
+    if (!comp) return;
+    comp.classList.toggle('hero-mode', !!inHero);
+    if (inHero) {
+      const es = messagesEl.querySelector('.empty-state');
+      if (es && comp.parentElement !== es) es.appendChild(comp);
+    } else {
+      const mainEl = messagesEl.parentElement;   // <main>
+      if (comp.parentElement !== mainEl) mainEl.appendChild(comp);
+    }
   }
 
   // 会话视图顶栏：显示/隐藏 + 设标题（t 为 null 时只切换可见性）
@@ -1459,7 +1478,7 @@
     head.style.display = show ? '' : 'none';
   }
 
-  function newChat() { sessionId = null; currentRunId = null; currentRunEl = null; messagesEl.innerHTML = ''; renderEmptyState(); setConvTitle('新会话', false); updateHint(); loadSessions(); }
+  function newChat() { mountComposer(false); sessionId = null; currentRunId = null; currentRunEl = null; messagesEl.innerHTML = ''; renderEmptyState(); setConvTitle('新会话', false); updateHint(); loadSessions(); }
 
   sendBtn.onclick = () => send();
   $('newChat').onclick = newChat;
