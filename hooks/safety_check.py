@@ -7,22 +7,56 @@ stdout: JSON  {"action": "continue" | "block", "message": "..."}
 
 拦截规则：
   - 默认拦截高风险 terminal 命令（rm -rf / 、mv 到系统目录、sudo、dd、mkfs 等）
-  - 环境变量 HERMES_UI_BYPASS_SAFETY=1 时全部放行（用户在前端明确批准后使用）
+  - 会话级放行：会话 id 出现在 ~/.hermes/ui_bypass_sessions.json 且未过期时全部放行
+    （用户在前端明确批准后由 server.js 写入；见下方"放行为什么改成会话级"）
+  - 环境变量 HERMES_UI_BYPASS_SAFETY=1 时全部放行（-z 路径的旧机制，保留兼容）
   - 非 terminal 工具直接放行
   - 解析失败时 fail-open（由 config 中的 fail_closed 兜底）
+
+  ⚠️ 这是**纵深防御（blocklist）而非硬边界**：编码变形命令（如 `bash -c $'…'`、
+     `find / -delete`、`curl … | sh`、管道下载后执行）可绕过正则；解析失败也会 fail-open。
+     它降低误操作与脚本误伤风险，但**不能当作"已锁死"**——敏感操作仍需人工在前端确认。
+
+放行为什么从"环境变量"改成"会话级文件"：
+  `hermes -z` 是每轮新起进程，server.js 能把 HERMES_UI_BYPASS_SAFETY=1 注入那一轮的进程，
+  所以"本次请求放行"用 env 就够了。但 `hermes serve` 是**常驻**进程 —— env 在 spawn 时
+  就固定了，无法按请求改。若为了放行而给常驻进程常开 bypass，等于永久关闭安全拦截。
+  因此放行信号改为落在一个**按会话、带 TTL** 的文件里：server.js 写，hook 读。
+  env 那条路保留，是为了 `-z` 回退路径继续可用。
 """
 import json
 import os
 import re
 import sys
+import time
 
-# 用户在前端确认"允许危险操作"后，后端会把此 env 注入 Hermes 进程
+# 先整块读入 stdin（而不是各处 json.load(sys.stdin)），这样才能既做调试转储又留给后面解析。
+raw_in = ""
+try:
+    raw_in = sys.stdin.read()
+except Exception:
+    raw_in = ""
+
+HOME = os.path.expanduser("~")
+BYPASS_FILE = os.path.join(HOME, ".hermes", "ui_bypass_sessions.json")
+
+# 调试开关：~/.hermes/hook_debug 存在时，把每次调用原样追加到 hook_calls.jsonl。
+# 用"文件存在"而非环境变量来控制，是因为 serve 常驻、env 改不了；
+# 文件随时可增删，排查完删掉即可。生产环境该文件不存在，零开销。
+if os.path.exists(os.path.join(HOME, ".hermes", "hook_debug")):
+    try:
+        with open(os.path.join(HOME, ".hermes", "hook_calls.jsonl"), "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": time.time(), "pid": os.getpid(), "raw": raw_in}, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+# 用户在前端确认"允许危险操作"后，后端会把此 env 注入 Hermes 进程（-z 路径）
 if os.environ.get("HERMES_UI_BYPASS_SAFETY") == "1":
     sys.stdout.write(json.dumps({"action": "continue"}))
     sys.exit(0)
 
 try:
-    payload = json.load(sys.stdin)
+    payload = json.loads(raw_in) if raw_in.strip() else {}
 except Exception:
     # 解析不出输入就放行，避免误伤；fail_closed 由 Hermes 侧的 timeout/崩溃兜底
     sys.stdout.write(json.dumps({"action": "continue"}))
@@ -30,6 +64,21 @@ except Exception:
 
 tool_name = payload.get("tool_name", "")
 tool_input = payload.get("tool_input") or {}
+
+# 会话级放行（serve 路径）：会话 id 命中且未过期时放行。
+# 判断放在"非 terminal 就直接放行"之前，因为放行本就不该区分工具类型。
+session_id = str(payload.get("session_id") or "")
+if session_id:
+    try:
+        with open(BYPASS_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        expiry = (data.get("sessions") or {}).get(session_id)
+        if expiry and float(expiry) > time.time():
+            sys.stdout.write(json.dumps({"action": "continue"}))
+            sys.exit(0)
+    except Exception:
+        # 文件缺失/损坏 → 按未放行处理（安全侧默认），不因读文件失败而放行
+        pass
 
 # 只拦 terminal 工具；read_file / write_file / search 等直接放行
 if tool_name != "terminal":

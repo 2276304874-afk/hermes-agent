@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- hermes gateway 常驻后端（选项 B 的聊天后端）。
+     为什么单独一个服务：gateway 是长驻进程，单进程多会话复用、首回合后全热，
+     且会在 run_startup 阶段注册 pre_tool_call 安全 hook（安全等效于 -z）。
+     监听 127.0.0.1:8642（loopback，不暴露局域网）；api_server 适配器在
+     ~/.hermes/config.yaml 的 gateway.platforms.api_server 里启用。 -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hermes-agent.gateway</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/zhaocaozheng/.hermes/venvs/hermes/bin/hermes</string>
+    <string>gateway</string>
+    <string>run</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <!-- 注册并执行安全 hook（pre_tool_call → hooks/safety_check.py） -->
+    <key>HERMES_ACCEPT_HOOKS</key>
+    <string>1</string>
+    <!-- 本地请求走 loopback，避免被代理拦截返回 502 -->
+    <key>NO_PROXY</key>
+    <string>127.0.0.1,localhost</string>
+    <key>no_proxy</key>
+    <string>127.0.0.1,localhost</string>
+    <key>PYTHONPATH</key>
+    <string></string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>ProcessType</key>
+  <string>Interactive</string>
+  <key>StandardOutPath</key>
+  <string>/Users/zhaocaozheng/Library/Logs/hermes-gateway.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/zhaocaozheng/Library/Logs/hermes-gateway.err.log</string>
+</dict>
+</plist>

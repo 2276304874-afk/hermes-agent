@@ -76,6 +76,35 @@ else
   fi
 fi
 
+# ---------- 2b. 安装 gateway 常驻后端（选项 B 聊天后端） ----------
+echo; echo "==> [2b/6] 安装 gateway 常驻后端 (127.0.0.1:8642)"
+GW_LABEL="com.hermes-agent.gateway"
+GW_SRC="$WS/launchd/$GW_LABEL.plist"
+GW_DST="$HOME_DIR/Library/LaunchAgents/$GW_LABEL.plist"
+if [ -f "$GW_DST" ] && ! grep -q "$WS" "$GW_DST" 2>/dev/null; then
+  launchctl bootout "$UI_DOMAIN/$GW_LABEL" 2>/dev/null
+  rm -f "$GW_DST"
+fi
+sed -e "s|/Users/zhaocaozheng|$HOME_DIR|g" "$GW_SRC" > "$GW_DST"
+echo "  ✓ gateway plist -> $GW_DST"
+if launchctl print "$UI_DOMAIN/$GW_LABEL" >/dev/null 2>&1; then
+  launchctl kickstart -k "$UI_DOMAIN/$GW_LABEL" 2>/dev/null && echo "  ✓ gateway 已重启"
+else
+  if ! launchctl bootstrap "$UI_DOMAIN" "$GW_DST" 2>/tmp/setup_boot_gw.err; then
+    echo "  ⚠ gateway bootstrap 失败: $(head -2 /tmp/setup_boot_gw.err 2>/dev/null)"
+    echo "    手动: launchctl bootstrap $UI_DOMAIN $GW_DST"
+  else
+    echo "  ✓ gateway bootstrap 成功"
+  fi
+fi
+for i in $(seq 1 20); do
+  if NO_PROXY=127.0.0.1,localhost curl -s -m 3 http://127.0.0.1:8642/health >/dev/null 2>&1; then
+    echo "  ✓ gateway 健康 (127.0.0.1:8642)"; break
+  fi
+  [ "$i" = 20 ] && echo "  ⚠ gateway 20 次探测未就绪（检查 ~/.hermes/config.yaml 的 gateway.api_server 是否 enabled）"
+  sleep 1
+done
+
 # ---------- 3. 健康检查 ----------
 echo; echo "==> [4/6] 健康检查"
 TOKEN=""

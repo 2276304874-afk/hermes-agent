@@ -77,7 +77,9 @@ process.on('exit', (code) => {
  *      KB 的 /api/kb/* 同样在内（P2-10 决策，详见 lib/routes/kb.js 头部）；
  *      公开的只有 GET /kb 页面壳与静态资源。
  *   2. Hermes 高风险命令由 pre_tool_call hook（hooks/safety_check.py）拦截。
- *      用户在前端批准后，本次请求带 allowDangerous=true → 注入 HERMES_UI_BYPASS_SAFETY=1。
+ *      用户在前端批准后，本次请求带 allowDangerous=true：`-z` 路径注入 HERMES_UI_BYPASS_SAFETY=1；
+ *      gateway 路径（常驻进程 env 固定，无法按请求改）改写 ui_bypass_sessions.json（见 lib/safety.js）。
+ *      hook 本身是 blocklist 纵深防御（见其文件头），不是硬边界——敏感操作仍需人工确认。
  *   3. 静态文件用 path.resolve + path.relative 防路径穿越。
  *   4. 请求体上限 100KB，prompt 截断到 8000 字符。
  *   5. 云端 key 明文存 ~/.hermes/cloud_providers.json（0600），API 返回时打码。
