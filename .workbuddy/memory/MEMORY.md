@@ -10,6 +10,8 @@
 - 配置 `~/.hermes/config.yaml`:`gateway.platforms.api_server.{enabled:true, extra:{host:127.0.0.1, port:8642, key:<≥16位>}}`,key=Bearer `API_SERVER_KEY`。**host 禁 0.0.0.0**。
 - launchd `com.hermes-agent.gateway.plist`(setup.sh [2b/6] 安装),env 含 `HERMES_ACCEPT_HOOKS=1` + `NO_PROXY=127.0.0.1,localhost` + 清空 `PYTHONPATH`。
 - Node 客户端 `lib/gateway.js`:`POST ${GATEWAY_BASE}/api/sessions`(**顶层**非 /v1)→ `chat/stream` SSE(`assistant.delta`→token;`done`/`run.completed` 带 session_id)。state.db 轮询 `newMessages()`→`msg`(tool/reasoning 权威)。`handleChatGateway` 优先于 -z 保底(gatewayUp 判定)。
+- ⚠️ **gateway 强制会话 title 全局唯一**(重复 → `400 invalid_title "Title already in use"`,响应体才见真因)。createSession 标题必须每轮唯一:`prompt.slice(0,32) + ' #' + runId.slice(0,8)`(2026-09-11 修,契约测试复跑暴露)。**gateway 错误必须带 body 片段抛出**,否则 400 无法排查。
+- ⚠️ `chatStream` 有**空闲看门狗**(默认 5min 无输出 abort,`HERMES_STREAM_IDLE_MIN` 覆盖)——选空闲而非总时长,长 agent run 不误杀。放行 TTL 默认 5min(`HERMES_BYPASS_TTL_MIN`),gateway `ready` 带 `bypassTtlMin` 供前端提示。
 - **危险命令放行**:`lib/safety.js` 的 `approveSession` 写 `ui_bypass_sessions.json`(秒级时间戳,hook 读);仅 `allowDangerous` 时 server 写入。⚠️ 单位秒,写毫秒=永久放行。
 
 ## 安全红线
