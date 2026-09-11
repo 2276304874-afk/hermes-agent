@@ -15,6 +15,29 @@ process.on('unhandledRejection', (reason, p) => {
   if (reason && reason.stack) console.error(reason.stack);
 });
 
+/* ---------- 生命周期归因（P0-2：让"进程为什么没了"可判定） ----------
+ * 之前的困境是：进程消失但日志里什么都没有，无法区分「代码崩了」和「被杀了」。
+ * 补上这几行之后，任何一次消失都能读出来：
+ *
+ *   [lifecycle] 收到 SIGTERM   → 外部要求停止（launchctl stop / kill）
+ *   [lifecycle] 进程退出 code= → 正常退出或崩溃（崩溃另有 [FATAL] 堆栈）
+ *   日志里【什么都没有】        → 只可能是 SIGKILL（例如 launchctl kickstart -k）
+ *                                或被系统回收 → 方向转为查"谁发的 kill"，不是查代码
+ *
+ * 收到信号后先记录，再 removeAllListeners + 重新发给自己，恢复默认处置 ——
+ * 这样退出码/退出方式与不加处理器时完全一致，不改变 launchd 的 KeepAlive 语义。 */
+console.error(`[lifecycle] 启动 pid=${process.pid} node=${process.version}`);
+for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+  process.on(sig, () => {
+    console.error(`[lifecycle] 收到 ${sig}，按默认行为退出`);
+    process.removeAllListeners(sig);
+    process.kill(process.pid, sig);
+  });
+}
+process.on('exit', (code) => {
+  console.error(`[lifecycle] 进程退出，code=${code}，已运行 ${Math.round(process.uptime())}s`);
+});
+
 /*
  * 赫尔墨斯特工 · Hermes Web UI 后端 (L3)
  * 无第三方依赖。通过 spawn 调用本地 Hermes CLI 作为引擎，并以 SSE 把
@@ -69,7 +92,8 @@ const { createRouter } = require('./lib/router');
 const { sendJSON, serveStatic } = require('./lib/http');
 const { TOKEN, checkAuth } = require('./lib/auth');
 const { patchState } = require('./lib/hermes');          // require 期即完成补丁自愈
-const { runStartupMaintenance } = require('./lib/maintenance');
+const { runStartupMaintenance, startHeartbeat } = require('./lib/maintenance');
+const { active } = require('./lib/state');               // 在跑的子进程表（心跳靠它判泄漏）
 
 const KbRoutes = require('./lib/routes/kb');
 const SessionRoutes = require('./lib/routes/session');
@@ -106,6 +130,14 @@ ChatRoutes.register(apiRouter);
 ToolboxRoutes.register(apiRouter);
 
 const server = http.createServer(async (req, res) => {
+  /* ---------- 请求/响应流错误隔离（P0-2） ----------
+   * EventEmitter 语义：'error' 事件若没有监听者，Node 直接把它升格为未捕获异常。
+   * 实测证实：res.emit('error') 无人监听 → 进程立刻退出。
+   * 真实来源是客户端 RST、或响应流在写回调中失败 —— 都是正常运维会遇到的事，
+   * 不该让整个服务陪葬。这里统一记一行日志并吞掉。 */
+  res.on('error', e => console.error(`[http] 响应流错误 ${req.method} ${req.url}: ${e && (e.code || e.message)}`));
+  req.on('error', e => console.error(`[http] 请求流错误 ${req.method} ${req.url}: ${e && (e.code || e.message)}`));
+
   try {
     if (await publicRouter.dispatch(req, res)) return;
     // 静态文件无需认证（登录页要能加载）
@@ -115,7 +147,21 @@ const server = http.createServer(async (req, res) => {
     if (await apiRouter.dispatch(req, res)) return;
     sendJSON(res, 404, { error: 'not found' });
   } catch (e) {
-    sendJSON(res, 500, { error: e.message });
+    /* ---------- 兜底错误处理（P0-2 崩溃根因） ----------
+     * 这里曾经是裸的 sendJSON(res, 500, ...)，是个致命写法：
+     * handler 已经发出响应头后抛错（SSE 路径在第 41 行就 writeHead 了），
+     * sendJSON 里的 writeHead 会抛 ERR_HTTP_HEADERS_SENT，二次异常逃出 catch →
+     * unhandledRejection → 进程退出。已用最小实验复现确认。
+     *
+     * 现在：先记日志（此前 handler 异常是完全静默的，无法排查），再只在「还没写响应」
+     * 时才回 500；已经开写就只把流失掉，不再试图纠正状态。 */
+    console.error(`[handler] ${req.method} ${req.url} 抛错：${e && e.message}`);
+    if (e && e.stack) console.error(e.stack);
+    if (!res.headersSent && !res.writableEnded) {
+      sendJSON(res, 500, { error: e.message });
+    } else {
+      try { res.end(); } catch { /* 响应已结束，忽略 */ }
+    }
   }
 });
 
@@ -138,4 +184,6 @@ server.listen(PORT, HOST, () => {
   }
   // P1-3: 打印路由登记数 —— 拆分后若某条路由漏登记，这一行会立刻对不上
   console.log(`路由登记：公开 ${publicRouter.list().length} 条 / 认证 ${apiRouter.list().length} 条`);
+  // P0-2: 运行时心跳（基线在此打点，之后每 30 分钟一行；HERMES_HB_MS 可覆盖）
+  startHeartbeat(active);
 });

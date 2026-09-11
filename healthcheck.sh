@@ -123,18 +123,37 @@ echo
 echo "[6] 日志健康"
 ERR="${LOG_DIR}/hermes-ui.err.log"
 OUT="${LOG_DIR}/hermes-ui.out.log"
+
+# 只统计「本次启动以来」的日志行，以 server.js 写的 [lifecycle] 启动 为界。
+# 为什么必须这样：err.log 是追加式的，历史故障会一直躺在里面。全量统计的结果是
+# 「修完 bug 之后自检仍然报红」—— 曾经因此把两条已修复的旧 [FATAL] 当成当前故障。
+since_boot() {
+  awk '/^\[lifecycle\] 启动/{n=0; buf=""} {buf=buf $0 "\n"} END{printf "%s", buf}' "$1"
+}
 if [ -f "${ERR}" ]; then
+  CUR="$(since_boot "${ERR}")"
+  if [ -z "${CUR}" ]; then
+    warn "err.log 无启动标记（可能是旧版本进程写入的），退化为全量统计"
+    CUR="$(cat "${ERR}" 2>/dev/null || true)"
+  fi
   # 注意：grep -c 无匹配时输出 0 但退出码为 1，故**不能**写 `|| echo 0`（会变成 "0\n0"）。
-  F="$(grep -c '\[FATAL' "${ERR}" 2>/dev/null)"; F="${F:-0}"
-  if [ "${F}" = "0" ]; then ok "无 [FATAL] 崩溃记录"; else bad "err.log 有 ${F} 条 [FATAL]，见 ${ERR}"; fi
-  PARSEN="$(grep -c '\[parse\]' "${ERR}" 2>/dev/null)"; PARSEN="${PARSEN:-0}"
-  if [ "${PARSEN}" = "0" ]; then ok "无 [parse] 解析告警"; else warn "[parse] 告警 ${PARSEN} 条 — CLI 输出格式可能已变 (见 ${ERR})"; fi
+  F="$(printf '%s\n' "${CUR}" | grep -c '\[FATAL')"; F="${F:-0}"
+  if [ "${F}" = "0" ]; then ok "本次启动无 [FATAL] 崩溃"; else bad "本次启动有 ${F} 条 [FATAL]，见 ${ERR}"; fi
+  # handler 异常：请求处理中抛错但被兜底 catch 接住（服务没死）。这是 P0-2 之前
+  # 完全看不到的信号 —— 旧写法下这类错误要么静默 500，要么二次写头把进程带走。
+  H="$(printf '%s\n' "${CUR}" | grep -c '\[handler\]')"; H="${H:-0}"
+  if [ "${H}" = "0" ]; then ok "本次启动无 [handler] 请求异常"; else warn "[handler] 捕获 ${H} 条请求异常（已被兜底处理，未崩溃）"; fi
+  PARSEN="$(printf '%s\n' "${CUR}" | grep -c '\[parse\]')"; PARSEN="${PARSEN:-0}"
+  if [ "${PARSEN}" = "0" ]; then ok "本次启动无 [parse] 解析告警"; else warn "[parse] 告警 ${PARSEN} 条 — CLI 输出格式可能已变 (见 ${ERR})"; fi
 else
   warn "找不到 ${ERR}"
 fi
 # 启动自印的关键行，用于发现"路径腐烂"
 if [ -f "${OUT}" ]; then
   grep -E "KB 解释器" "${OUT}" 2>/dev/null | tail -1 | sed 's/^/     /'
+  # 运行时心跳基线/快照：rss 是否持续爬升、active（在跑子进程）是否泄漏
+  HB="$(grep '\[hb' "${OUT}" 2>/dev/null | tail -1)"
+  [ -n "${HB}" ] && echo "     ${HB}"
 fi
 
 # ---------- 7. 依赖探测 ----------

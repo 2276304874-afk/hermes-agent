@@ -12,6 +12,6 @@
     "backup": "bash backup.sh",
     "mirror": "node scripts/push-via-api.js main",
     "mirror:dry": "node scripts/push-via-api.js main --dry-run",
-    "check": "for f in server.js lib/*.js lib/routes/*.js public/app.js scripts/*.js; do node --check \"$f\" || exit 1; done"
+    "check": "for f in server.js lib/*.js lib/routes/*.js public/app.js scripts/*.js test/*.js; do node --check \"$f\" || exit 1; done"
   }
 }
