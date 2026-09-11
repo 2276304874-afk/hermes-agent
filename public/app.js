@@ -1160,6 +1160,12 @@
       currentRunId = obj.runId; if (obj.sessionId) sessionId = obj.sessionId;
       curStats = null;
       if (obj.cloud) addNote('☁️ 本轮使用云端模型 ' + obj.model, 'cloud');
+      // F②：危险放行提示。gateway 路径带 bypassTtlMin（文件放行有 TTL）；-z 路径按轮 env 放行、仅本轮有效。
+      if (obj.allowDangerous) {
+        addNote(obj.bypassTtlMin
+          ? '⚠️ 危险命令放行已开启：本会话 ' + obj.bypassTtlMin + ' 分钟内生效，到期自动恢复拦截'
+          : '⚠️ 危险命令放行已开启（仅本轮有效）', 'cloud');
+      }
       updateHint();
     }
     else if (ev === 'session') { sessionId = obj.sessionId; updateHint(); loadSessions(); }
