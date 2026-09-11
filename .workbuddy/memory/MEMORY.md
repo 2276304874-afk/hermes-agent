@@ -34,6 +34,17 @@
   最后 `git commit`;需要生效时 `launchctl kickstart -k gui/$(id -u)/com.hermes-agent.ui`(前端三文件实时读盘 + no-cache,改完刷新即可,无需重启;只有改 `lib/` 才需 kickstart)。
 - **启动日志可核对项**:`路由登记:公开 N 条 / 认证 M 条`(漏登记立刻可见)、`KB 解释器:<path>`(路径腐烂可见)、`流式补丁:…`(oneshot 自愈状态)。
 
+## 备份与异地镜像(2026-09-11 建立)
+- **本地 bundle**:`npm run backup`(`backup.sh`)。产物落 `../_hermes-backups/hermes-repo-<时间戳>.bundle`,默认保留最近 10 份(`HERMES_BACKUP_KEEP` 可改)。可传外部目标:`bash backup.sh /Volumes/xxx`(复制后 sha256 双向核对)。**还原:`git clone <bundle> <目录>`**——已实测可完整还原(11 提交 / 80 文件 / 关键文件 sha256 与工作区一致)。
+  - ⚠️ 同盘备份**不防磁盘故障**,脚本会主动告警。
+  - ⚠️ 备份被中断会留下 `<file>.bundle.lock`,此后每次都报 "Another git process seems to be running"(消息误导,其实是输出文件的锁)。`backup.sh` 每次开跑先清。
+- **异地镜像**:GitHub 私有库 **`2276304874-afk/hermes-agent`**(用户确认该账号是其本人账号)。刷新用 `npm run mirror`(`scripts/push-via-api.js`)。
+  - **为什么不用 `git push`**:本机网络对 `github.com:443` 返回 `CONNECT tunnel failed, response 502`(策略阻断);对照实测 `api.github.com`→200、`codeload.github.com`→301、`github.com`→超时。所以只能走 REST API 的 Git Data API(blob→tree→commit→ref),保留完整提交图。
+  - ⚠️ **坑 1:`git ls-tree` 默认转义非 ASCII 路径**。`core.quotePath=true` 时 `项目导读.md` 被输出成 `"\351\241\271..."`,直接当 path 用会在 GitHub 生成**名字真的是那串转义**的文件。**必须用 `git ls-tree -r -z`**(NUL 分隔,原始字节)。识别症状:远端文件名带引号 + 根树条目顺序异常(引号 0x22 让它们排到最前)。
+  - ⚠️ **坑 2:提交 sha 无法与本地对齐**(GitHub 硬限制)。git 把时间戳写成 `<epoch> ±HHMM`(本地 `+0800`),GitHub **归一到 UTC**(返回 `...Z`)→ 字节不同 → sha 不同并沿 parent 链级联。**树 sha 可以逐提交全等(实测 11/11),提交 sha 必然 0/11**。
+  - **因此:把 GitHub 当只读异地镜像,不要指望 `git push`**。要更新就重跑 `npm run mirror`。若哪天想对齐 sha,只能让提交从一开始用 +0000 时区,或 `git fetch origin && git reset --hard origin/main` 以远端为准(动手前先 backup)。
+  - 校验手段:远端根树 sha == 本地 `HEAD^{tree}` + 逐提交树 sha 比对 + 沿 parent 链数提交数。**不要只用"逐文件比对"**——两侧若都取转义输出会拿 bug 跟自己对账,报"全部一致"但其实是错的。
+
 ## 模型与 Ollama
 - **主模型(2026-09-10 起):`hermes-local-gemma4`**(base `gemma4:e4b`,PLE 稀疏激活,9.6GB 盘 / ~3.3GB 驻留,128K ctx,原生 tools+vision+audio)。**一个模型同时扛对话/工具/视觉/音频**,已不再需要 llava 换载。
 - Ollama.app(GUI)托管,max_loaded_models 默认 1。
@@ -68,6 +79,7 @@
 - ✅ **git 建库完成**(5 次提交 `f5d8a7b` → `9f93aa2` → `7f31a07` → `6b3b0da` → `a2e8c7c`);**P1-6 测试基线完成**(29 例单测 + 44 项路由冒烟 + **22 项浏览器冒烟** + 19 项健康自检);**P1-3 四步全部完成**:lib/parse.js → lib/router.js + lib/routes/*(1341→848) → lib/ 12 个域模块(849→141) → 前端 html/css/js 三分(1864→151)。
 - ✅ **全局崩溃日志已证明有用**:`server.js` 头部的 `uncaughtException`/`unhandledRejection` 处理器 + `[FATAL ...]` 输出,在前端拆分时实测抓到过一次启动期 `ReferenceError`(并行编辑丢更新导致),把"静默死"变成了带完整堆栈的定位。P0-2「崩溃根因未定」由此降级为「已有捕获手段,等复现」。
 - ⏳ 待办:P0-2 崩溃根因(等复现) / P2-10 KB 认证决策 / `parseSkillsList` 死代码待清 / 前端 `app.js` 1422 行可考虑按域再分(现在至少已有语法网 + 浏览器冒烟网兜底,比此前安全得多)。
-- 📌 **标准验收命令一次跑全**:`npm test && npm run smoke && npm run ui && npm run health`。
+- ✅ **离机备份 + 异地镜像已建立**(2026-09-11):`npm run backup`(本地 bundle,可还原)+ `npm run mirror`(GitHub 私有库 `2276304874-afk/hermes-agent`)。详见上方「备份与异地镜像」段。此前"提交只存在本地 .git"的单点风险已消除。
+- 📌 **标准验收命令一次跑全**:`npm test && npm run smoke && npm run ui && npm run health`;`npm run check` 覆盖 server.js + lib/** + public/app.js + scripts/**。
 - 小隐患(未修,不紧急):`POST /api/memory/save` 的「只允许写固定路径」防御是**恒真的死代码**(`which` 三元只可能落在两个常量上),安全性没问题但注释有误导。
 - 改进清单见 `IMPROVEMENT_PLAN.md`;历史路线图见 `UPGRADE_ROADMAP.md` 与 daily logs。
