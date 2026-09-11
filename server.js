@@ -107,6 +107,7 @@ const ProviderRoutes = require('./lib/routes/provider');
 const MediaRoutes = require('./lib/routes/media');
 const ChatRoutes = require('./lib/routes/chat');
 const ToolboxRoutes = require('./lib/routes/toolbox');
+const WorkspaceRoutes = require('./lib/routes/workspace');
 
 /* ---------- 启动自检 ----------
  * 顺序固定：流式补丁（已在 require './lib/hermes' 时自愈）→ 日志截断 → 上传清扫 + 24h 周期。
@@ -134,6 +135,7 @@ MediaRoutes.register(apiRouter);
 KbRoutes.registerAuthed(apiRouter);   // P2-10：KB 数据接口（/api/kb/* 与 /api/kb?q=）一律在认证闸门之后
 ChatRoutes.register(apiRouter);
 ToolboxRoutes.register(apiRouter);
+WorkspaceRoutes.register(apiRouter);   // dsh 式工作区：列表/新建/删除/会话归属
 
 const server = http.createServer(async (req, res) => {
   /* ---------- 请求/响应流错误隔离（P0-2） ----------

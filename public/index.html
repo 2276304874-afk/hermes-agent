@@ -56,6 +56,7 @@
   <div class="layout">
     <aside id="sidebar">
       <button id="newChatSide" class="side-new" title="开启新会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8.5" x2="12" y2="15.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></svg>新会话</button>
+      <div class="ws-bar" id="wsBar" title="工作区：过滤会话；新会话将归入所选工作区"></div>
       <h3>历史会话</h3>
       <input id="sessSearch" class="sess-search" type="text" placeholder="🔍 搜索会话…" autocomplete="off" />
       <div class="sess-list" id="sessList"></div>
@@ -69,6 +70,7 @@
     <main>
       <div class="conv-head" id="convHead" style="display:none">
         <div class="conv-title" id="convTitle">新会话</div>
+        <div class="conv-meta" id="convMeta"></div>
       </div>
       <div class="messages" id="messages"></div>
       <div class="composer" id="composer">
@@ -80,6 +82,7 @@
             <button class="mic-btn" id="fileBtn" title="上传文件（小文本直读；PDF/大文件存盘后交给 Hermes 读取）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3.5H7a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5z"/><path d="M14 3.5v5h5"/><line x1="9" y1="13" x2="15" y2="13"/><line x1="9" y1="17" x2="12.5" y2="17"/></svg></button>
             <input type="file" id="fileInput" style="display:none" />
             <button class="mic-btn" id="micBtn" title="语音输入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.8" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="18" x2="12" y2="21.2"/></svg></button>
+            <button id="wsModBtn" class="ws-mod" type="button" title="允许本轮及后续指令执行终端等高危工具（安全 hook 仍拦截明显破坏性命令；gateway 放行有效期见提示）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 4.5 6.4v5.1c0 4.4 3.2 7.7 7.5 9 4.3-1.3 7.5-4.6 7.5-9V6.4z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>工作区内修改</button>
             <div class="spacer"></div>
             <div class="seg" id="modeSeg" title="对话模式：思考=展示深度思考过程，快速=跳过">
               <button type="button" data-mode="fast">快速</button>

@@ -26,6 +26,9 @@
   let lastPrompt = '';        // 最近一次发送的 prompt，用于审批后重跑
   let blockedCommand = '';    // 最近被拦截的命令，展示在审批弹窗
   let pendingAllowDangerous = false; // 审批通过后的重跑标记
+  /* dsh 式工作区（2026-09-12）：activeWs='' 表示「全部/未选」；wsModOn = 输入卡内「工作区内修改」开关（= allowDangerous） */
+  let wsList = [], wsAssign = {}, activeWs = '';
+  let wsModOn = false;
 
   /* ---------- P1-5 静默 catch 治理 ----------
    * 规范：catch 里"什么都不做"会让故障看起来像"功能本来就没有"——模型下拉空了、
@@ -105,7 +108,7 @@
     setToken(t);
     try {
       const r = await apiFetch('/api/auth');
-      if (r.ok) { hideLogin(); loadSessions(); loadModels(); refreshStatus(); if (!messagesEl.querySelector('.empty-state') && !messagesEl.children.length) renderEmptyState(); }
+      if (r.ok) { hideLogin(); loadSessions(); loadWorkspaces(); loadModels(); refreshStatus(); if (!messagesEl.querySelector('.empty-state') && !messagesEl.children.length) renderEmptyState(); }
       else { alert('令牌错误，请重试'); }
     } catch { /* 已弹登录 */ }
   };
@@ -622,7 +625,8 @@
   function renderSessItem(s) {
     const el = document.createElement('div');
     el.className = 'sess-item' + (s.id === sessionId ? ' active' : '');
-    el.innerHTML = '<div class="t">' + escapeHtml(s.title) + '</div><div class="m">' + escapeHtml(s.info) + '</div>'
+    const wsTag = wsAssign[s.id] ? '<span class="ws-tag">📁 ' + escapeHtml(wsAssign[s.id]) + '</span> ' : '';
+    el.innerHTML = '<div class="t">' + escapeHtml(s.title) + '</div><div class="m">' + wsTag + escapeHtml(s.info) + '</div>'
       + '<div class="sess-actions">'
       + '<button type="button" data-act="rename" title="重命名"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18.2 3.3a2.1 2.1 0 0 1 3 3L13 14.5l-4 1 1-4z"/><path d="M19.5 14.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h4.5"/></svg></button>'
       + '<button type="button" data-act="export" title="导出 Markdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><polyline points="7.5,10 12,14.5 16.5,10"/><path d="M4 16.5V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2.5"/></svg></button>'
@@ -633,6 +637,7 @@
     el.onclick = async () => {
       sessionId = s.id; currentRunId = null; currentRunEl = null;
       setConvTitle(s.title, true);   // 会话视图顶栏：载入历史会话时显示其标题
+      setConvMeta(wsAssign[s.id] || '');
       mountComposer(false);          // 输入卡先归位底部，再清空消息区（防被 innerHTML='' 连带销毁）
       if (isMobile()) setSideDrawer(false);   // 手机上选中会话后收起抽屉
       messagesEl.innerHTML = '';
@@ -658,6 +663,61 @@
     return el;
   }
 
+  /* ---------- dsh 式工作区：侧栏 chips + 归属过滤 ---------- */
+  async function loadWorkspaces() {
+    try {
+      const r = await apiFetch('/api/workspaces');
+      if (!r.ok) return softFail('拉取工作区', new Error('HTTP ' + r.status));
+      const data = await r.json();
+      wsList = data.workspaces || [];
+      wsAssign = data.assignments || {};
+      renderWsBar();
+    } catch (e) { softFail('拉取工作区', e); }
+  }
+  function renderWsBar() {
+    const bar = $('wsBar');
+    if (!bar) return;
+    bar.innerHTML = '';
+    const mk = (label, val, cls) => {
+      const c = document.createElement('button');
+      c.type = 'button'; c.className = 'ws-chip' + (cls ? ' ' + cls : '') + (activeWs === val ? ' on' : '');
+      c.textContent = label;
+      c.onclick = async () => {
+        if (cls === 'add') {
+          const name = prompt('新工作区名称（1-40 字）：', '');
+          if (!name || !name.trim()) return;
+          try {
+            const r = await apiFetch('/api/workspace/create', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name.trim() }) });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) { alert('创建失败: ' + (d.error || r.status)); return; }
+            if (Array.isArray(d.workspaces)) wsList = d.workspaces;
+            activeWs = name.trim().slice(0, 40);
+          } catch (e) { alert('创建失败: ' + e.message); return; }
+        } else {
+          activeWs = (activeWs === val) ? '' : val;   // 再点一次取消（回「全部」）
+        }
+        renderWsBar(); loadSessions(); refreshHeroCtx();
+      };
+      bar.appendChild(c);
+    };
+    mk('全部', '', 'all');
+    for (const w of wsList) mk(w, w);
+    mk('＋', '', 'add');
+  }
+  /* Hero 空态的工作区选择 chip（在标题下方，dsh 同位）；进入会话后不存在，由 conv-meta 承担 */
+  function refreshHeroCtx() {
+    const sel = document.getElementById('heroWs');
+    if (!sel) return;
+    sel.innerHTML = '';
+    const optAll = document.createElement('option');
+    optAll.value = ''; optAll.textContent = '未归类';
+    sel.appendChild(optAll);
+    for (const w of wsList) {
+      const o = document.createElement('option'); o.value = w; o.textContent = '📁 ' + w; sel.appendChild(o);
+    }
+    sel.value = activeWs || '';
+  }
+
   async function loadSessions() {
     // 失败必须显式暴露：以前是 catch(e){} 静默吞掉，服务挂了 / 401 / 接口报错
     // 都只显示"暂无历史会话"，用户分不清是"真没有"还是"没加载出来"。
@@ -680,19 +740,22 @@
         sessListEl.appendChild(w);
       }
       const list = (data.sessions || []).filter(s =>
-        !q || String(s.title).toLowerCase().includes(q) || String(s.info).toLowerCase().includes(q) || String(s.id).includes(q)
+        (!activeWs || wsAssign[s.id] === activeWs) &&
+        (!q || String(s.title).toLowerCase().includes(q) || String(s.info).toLowerCase().includes(q) || String(s.id).includes(q))
       );
+      // 工作区过滤下补充分组标签，让「这个工作区有什么」一目了然
+      const scopeLabel = activeWs ? activeWs + ' · ' : '';
       const groups = {};
       list.forEach(s => { const g = sessGroupLabel(s); (groups[g] = groups[g] || []).push(s); });
       for (const label of GROUP_ORDER) {
         if (!groups[label] || !groups[label].length) continue;
-        const h = document.createElement('div'); h.className = 'sess-group'; h.textContent = label + ' · ' + groups[label].length;
+        const h = document.createElement('div'); h.className = 'sess-group'; h.textContent = scopeLabel + label + ' · ' + groups[label].length;
         sessListEl.appendChild(h);
         for (const s of groups[label]) sessListEl.appendChild(renderSessItem(s));
       }
       if (!list.length) {
         const e = document.createElement('div'); e.className = 'sess-group';
-        e.textContent = q ? '无匹配会话' : '暂无历史会话'; sessListEl.appendChild(e);
+        e.textContent = q ? '无匹配会话' : (activeWs ? '该工作区暂无会话' : '暂无历史会话'); sessListEl.appendChild(e);
       }
     } catch (e) {
       sessListEl.innerHTML = '';
@@ -1173,7 +1236,12 @@
       }
       updateHint();
     }
-    else if (ev === 'session') { sessionId = obj.sessionId; updateHint(); loadSessions(); }
+    else if (ev === 'session') {
+      sessionId = obj.sessionId;
+      if (activeWs && !wsAssign[sessionId]) { wsAssign[sessionId] = activeWs; renderWsBar(); }   // 乐观更新，省一次拉取
+      if (activeWs) setConvMeta(activeWs);
+      updateHint(); loadSessions();
+    }
     else if (ev === 'notice') { addNote('☁️ ' + obj.message, 'cloud'); }
     else if (ev === 'token') {
       // 真流式：逐 token 追加到当前 run 的回答区（节流渲染）
@@ -1414,7 +1482,11 @@
       }
       const resp = await apiFetch('/api/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: finalPrompt, sessionId, model: modelSelect.value, allowDangerous: !!allowDangerous })
+        body: JSON.stringify({
+          prompt: finalPrompt, sessionId, model: modelSelect.value,
+          allowDangerous: !!allowDangerous || wsModOn,          // 卡内「工作区内修改」开关与审批重跑共用一条放行链路
+          workspace: (!sessionId && activeWs) ? activeWs : '',  // 仅新会话首轮传工作区，服务端 assignIfNew 只在无归属时写入
+        })
       });
       const reader = resp.body.getReader(); const decoder = new TextDecoder();
       let buf = '';
@@ -1443,7 +1515,10 @@
   function renderEmptyState() {
     const es = document.createElement('div'); es.className = 'empty-state';
     es.innerHTML = '<div class="hero-row"><div class="hero-mark">' + HERO_MARK + '</div>'
-      + '<h2>赫尔墨斯特工</h2><span class="hero-pill">本地优先</span></div><div class="chip-grid"></div>';
+      + '<h2>赫尔墨斯特工</h2><span class="hero-pill">本地优先</span></div>'
+      // dsh 同位：标题下方一行上下文 chip（工作区选择；模式/模型在输入卡内）
+      + '<div class="hero-ctx"><select id="heroWs" title="新会话将归入所选工作区"></select></div>'
+      + '<div class="chip-grid"></div>';
     const grid = es.querySelector('.chip-grid');
     for (const q of CHIP_PROMPTS) {
       const c = document.createElement('button'); c.className = 'chip'; c.type = 'button'; c.textContent = q;
@@ -1477,6 +1552,11 @@
     if (t != null) el.textContent = t || '新会话';
     head.style.display = show ? '' : 'none';
   }
+  // 会话视图顶栏右侧：工作区归属（空串清空）
+  function setConvMeta(t) {
+    const el = $('convMeta');
+    if (el) el.textContent = t ? '📁 ' + t : '';
+  }
 
   function newChat() { mountComposer(false); sessionId = null; currentRunId = null; currentRunEl = null; messagesEl.innerHTML = ''; renderEmptyState(); setConvTitle('新会话', false); updateHint(); loadSessions(); }
 
@@ -1484,6 +1564,16 @@
   $('newChat').onclick = newChat;
   // 工作台改版：侧栏顶部新会话按钮与头部「新对话」同逻辑
   if ($('newChatSide')) $('newChatSide').onclick = newChat;
+  // dsh 式「工作区内修改」开关：即 allowDangerous 的卡内可见形态（安全 hook 仍兜底）
+  const wsModBtnEl = $('wsModBtn');
+  if (wsModBtnEl) wsModBtnEl.onclick = () => {
+    wsModOn = !wsModOn;
+    wsModBtnEl.classList.toggle('on', wsModOn);
+    addNote(wsModOn
+      ? '⚠️ 工作区内修改已开启：agent 可执行终端等高危工具（到期自动恢复拦截）'
+      : '工作区内修改已关闭', wsModOn ? 'cloud' : '');
+    updateHint();
+  };
   // 移动端适配：≤720px 侧栏变抽屉 + 遮罩；桌面端行为不变（.hidden 控制收合）
   const backdrop = $('backdrop');
   const isMobile = () => window.innerWidth <= 720;
@@ -1511,7 +1601,7 @@
 
   updateHint();
   // 有 token 直接加载，否则弹登录
-  if (getToken()) { loadSessions(); loadModels(); refreshStatus(); renderEmptyState(); }
+  if (getToken()) { loadSessions(); loadWorkspaces(); loadModels(); refreshStatus(); renderEmptyState(); }
   else showLogin();
 
   // 会话列表自愈：以前只在加载时取一次，任何一次失败（服务没就绪/重启中/网络抖动）
