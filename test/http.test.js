@@ -33,7 +33,8 @@ function mockRes(state = {}) {
       if (headersSent) throw Object.assign(new Error('writeHead after headers sent'), { code: 'ERR_HTTP_HEADERS_SENT' });
       headersSent = true; calls.push(['writeHead', code, headers]); return this;
     },
-    write(s) {
+    // 允许注入自定义 write —— 用于模拟「socket 已断、write 抛 EPIPE」等崩溃场景
+    write: state.write || function (s) {
       if (writableEnded) throw Object.assign(new Error('write after end'), { code: 'ERR_STREAM_WRITE_AFTER_END' });
       calls.push(['write', s]); return true;
     },
@@ -123,6 +124,25 @@ test('sse：数据里的换行被转义，不会破坏分帧', () => {
   sse(res, 'token', { text: 'a\nb' });
   // JSON.stringify 会把 \n 变成 \\n —— 否则一行 data 会被拆成两行，SSE 解析错乱
   assert.strictEqual(calls[1][1], 'data: {"text":"a\\nb"}\n\n');
+});
+
+/* ---- 崩溃防护：sse 处在「客户端半途断开」的第一线。
+ *      它是在异步回调里被调用的（tail 轮询 / 工具事件），一旦抛错就会变成
+ *      unhandledRejection → 历史上 P0-2 正是这条链路把整个服务拖崩。 ---- */
+test('sse：socket 已断导致 write 抛错 → 返回 false，绝不外抛', () => {
+  const boom = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+  const { res } = mockRes({
+    write: () => { throw boom; },
+  });
+  assert.strictEqual(sse(res, 'token', { text: 'x' }), false, '断连必须表现为 false，而非异常');
+});
+
+test('sse：序列化失败（循环引用）→ 返回 false，绝不外抛', () => {
+  const { res, calls } = mockRes();
+  const cyclic = {};
+  cyclic.self = cyclic;                       // JSON.stringify 会抛 TypeError
+  assert.strictEqual(sse(res, 'token', { bad: cyclic }), false);
+  assert.strictEqual(calls.length, 0, '序列化失败不得产生任何半截写入');
 });
 
 test('sse：响应已结束 → 丢弃，零写入（异步 tail 回调晚到的场景）', () => {

@@ -321,6 +321,23 @@ const CONSOLE_WHITELIST = [
     await page.goto(`${BASE}/`, { waitUntil: 'load' });
     await page.waitForTimeout(800);
 
+    /* ---------- L7 思考块显示开关的语义守门 ----------
+     * 2026-09-12：原名「快速/思考」会让人以为切换后回答变快，但该开关从不进入请求参数。
+     * 这里锁住「不得再用暗示速度的词」，防止日后改回去。 */
+    const modeProbe = await page.evaluate(() => {
+      const seg = document.getElementById('modeSeg');
+      if (!seg) return { missing: true };
+      const btns = [...seg.querySelectorAll('button')].map(b => b.textContent.trim());
+      return { missing: false, labels: btns, ctrls: seg.querySelectorAll('button').length };
+    });
+    check(modeProbe.missing === false, '思考块开关存在', String(modeProbe.missing));
+    check(modeProbe.ctrls === 2, '开关为展开/折叠两段', String(modeProbe.ctrls));
+    check(
+      !modeProbe.labels.some(t => /快速|极速|加速|省时/.test(t)),
+      '开关文案不得暗示影响速度（本开关只切显示）',
+      modeProbe.labels.join(' / ')
+    );
+
     /* ---------- 截图存档 ---------- */
     try {
       await page.screenshot({ path: SHOT, fullPage: false });

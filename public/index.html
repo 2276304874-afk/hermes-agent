@@ -84,9 +84,12 @@
             <button class="mic-btn" id="micBtn" title="语音输入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.8" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="18" x2="12" y2="21.2"/></svg></button>
             <button id="wsModBtn" class="ws-mod" type="button" title="允许本轮及后续指令执行终端等高危工具（安全 hook 仍拦截明显破坏性命令；gateway 放行有效期见提示）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 4.5 6.4v5.1c0 4.4 3.2 7.7 7.5 9 4.3-1.3 7.5-4.6 7.5-9V6.4z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>工作区内修改</button>
             <div class="spacer"></div>
-            <div class="seg" id="modeSeg" title="对话模式：思考=展示深度思考过程，快速=跳过">
-              <button type="button" data-mode="fast">快速</button>
-              <button type="button" data-mode="think" class="on">思考</button>
+            <!-- 这两个按钮只控制**思考内容在界面上的显示/隐藏**，不影响模型行为：
+                 本地模型的思维链属于同一次推理，开关它既不省时间也不省 token。
+                 2026-09-12 由「快速/思考」更名 —— 旧名会让人以为切换后回答变快。 -->
+            <div class="seg" id="modeSeg" title="思考过程显示：展开=显示完整思考链，折叠=只看最终回答（不影响模型推理，也不改变响应速度）">
+              <button type="button" data-mode="fast">折叠</button>
+              <button type="button" data-mode="think" class="on">展开</button>
             </div>
             <select id="modelSelect"></select>
             <button class="send-btn" id="sendBtn" title="发送"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5.5"/><polyline points="6.5,11 12,5.5 17.5,11"/></svg></button>

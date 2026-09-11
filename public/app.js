@@ -58,9 +58,13 @@
   // 与 head 脚本同步：无偏好默认暗色
   applyTheme((document.documentElement.dataset.theme || 'dark'), false);
 
-  /* ---------- B7 快速/思考模式 ---------- */
+  /* ---------- B7 思考块显示控制 ----------
+   * 2026-09-12 更名：原称「快速/思考 模式」，但该开关**从不改变请求参数** —— 本地模型的
+   * 思维链与回答属于同一次推理，折叠它既不省时间也不省 token，因此「快速」属误导。
+   * 变量内部仍沿用 chatMode/'fast'/'think'，避免动 localStorage key 与既有行为。
+   * ⚠️ 刻意保持不随请求下传：本地小模型关闭 CoT 会退化成「只说不做」（工具调用失灵）。 */
   const modeSeg = $('modeSeg');
-  let chatMode = 'think';   // 'fast' 跳过深度思考过程展示；'think' 展开
+  let chatMode = 'think';   // 'fast' 折叠思考块；'think' 展开
   try { chatMode = localStorage.getItem('hermes_ui_mode') || 'think'; } catch (e) { softFail('读取模式偏好', e); }
   function setMode(m) {
     chatMode = m;
