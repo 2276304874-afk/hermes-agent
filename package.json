@@ -8,6 +8,6 @@
     "test": "node --test test/*.test.js",
     "smoke": "bash test/routes.smoke.sh",
     "health": "bash healthcheck.sh",
-    "check": "node --check server.js && node --check lib/parse.js && node --check lib/router.js && node --check lib/routes/kb.js && node --check lib/routes/session.js && node --check lib/routes/system.js && node --check lib/routes/provider.js && node --check lib/routes/media.js && node --check lib/routes/chat.js && node --check lib/routes/toolbox.js"
+    "check": "for f in server.js lib/*.js lib/routes/*.js; do node --check \"$f\" || exit 1; done"
   }
 }
