@@ -108,6 +108,17 @@ header 的时钟回溯图标 `#cpBtn` → `#cpMask` 模态框（项目下拉 / �
 - 补齐缘由：曾出现 837 个松散对象里只有 162 个可达（25MB 垃圾）；
   `reflog expire --expire=now --all` + `gc --prune=now` 回收到 489KB（1 pack）。
 
+> ⚠️ **两个上限的真源是分开的，改一个不会同步另一个**（容易踩）：
+>
+> | 参数 | Python 侧（hermes 写快照） | Node 侧（本文件的 gc/prune） |
+> |---|---|---|
+> | 全库上限 | `config.yaml` 的 `checkpoints.max_total_size_mb` | 环境变量 `HERMES_CHECKPOINT_MAX_TOTAL_MB`（默认 300） |
+> | 单项目张数 | `checkpoints.max_snapshots` | `HERMES_CHECKPOINT_MAX_SNAPSHOTS`（默认 20） |
+> | 单文件大小 | `checkpoints.max_file_size_mb` | `HERMES_CHECKPOINT_MAX_FILE_MB`（默认 10） |
+>
+> 两边默认值当前一致（300 / 20 / 10）。若只改 `config.yaml`，Python 侧收紧而 **Node 侧的 gc 仍按旧值判断**——
+> 表现为"配置改了但库还在涨"。要改就两处一起改。
+
 ### 1.9 ⚠️ git 隔离纪律（安全）
 
 所有影子库 git 调用必须：
@@ -198,6 +209,7 @@ terminal:
 | `HERMES_CHECKPOINT_BASE` | `~/.hermes/checkpoints` | 影子库位置（测试指向临时目录） |
 | `HERMES_CHECKPOINT_MAX_SNAPSHOTS` | 20 | 单项目张数上限 |
 | `HERMES_CHECKPOINT_MAX_FILE_MB` | 10 | 单文件大小上限 |
+| `HERMES_CHECKPOINT_MAX_TOTAL_MB` | 300 | 全库上限（⚠️ 与 `config.yaml` 的同名项是**两套真源**，见 §1.8） |
 
 ### 3.6 与审计推荐方案的差异（诚实记录）
 
