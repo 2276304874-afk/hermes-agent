@@ -324,13 +324,24 @@ async function bootstrapIfEmpty() {
   // ---------- 4) 保真度校验 ----------
   OUT('');
   OUT('[4/4] 保真度校验');
+
+  /* ⚠️ 校验基准必须取自"推送开始时快照的 commits[]"，不能实时重读 BRANCH。
+   * 实测踩坑：整趟推送要跑 ~8 分钟，期间只要本地又落了一笔提交，
+   * 收尾时的 `git rev-parse BRANCH` 已经是**新 HEAD** → 拿"新 HEAD 的树"去比
+   * "已推送的树"，于是报出 ❌ 根树不一致 + ❌ 历史缺失（本地 60 / 远端 59）。
+   * 实际上已推送的那一批是逐提交 59/59 全等、内容没有任何问题 —— 纯误报。
+   * 把基准钉在快照上，校验就与 git 的实时状态解耦。 */
+  const headLocal = commits[commits.length - 1].sha;
+  const localN = commits.length;
+  const tipNow = gitText(['rev-parse', BRANCH]).trim();
+
   if (DRY) {
     OUT('  DRY-RUN：跳过远端比对');
-    OUT(`  本地树 sha: ${gitText(['rev-parse', `${BRANCH}^{tree}`]).trim()}`);
+    OUT(`  本地树 sha: ${gitText(['rev-parse', `${headLocal}^{tree}`]).trim()}`);
   } else {
     const remote = await api('GET', `${API}/git/commits/${headRemote}`);
-    const localTree = gitText(['rev-parse', `${BRANCH}^{tree}`]).trim();
-    OUT(`  本地根树 sha: ${localTree}`);
+    const localTree = gitText(['rev-parse', `${headLocal}^{tree}`]).trim();
+    OUT(`  本地根树 sha: ${localTree}   (来自 ${headLocal.slice(0, 7)})`);
     OUT(`  远端根树 sha: ${remote.tree.sha}`);
     if (remote.tree.sha !== localTree) {
       OUT('  ❌ 根树 sha 不一致 —— 内容有偏差，需要排查');
@@ -368,9 +379,17 @@ async function bootstrapIfEmpty() {
       cur = (c.parents && c.parents[0]) ? c.parents[0].sha : null;
       if (n > 10000) break;            // 防御：避免异常数据导致死循环
     }
-    const localN = Number(gitText(['rev-list', '--count', BRANCH]).trim());
     OUT(`  远端可达提交: ${n} / 本地 ${localN}` + (n === localN ? '  ✅ 完整历史' : '  ❌ 历史缺失'));
     if (n !== localN) process.exitCode = 1;
+
+    // 推送期间本地分支前进了：本次报告只覆盖推送时的那一批，必须显式讲清楚，
+    // 否则用户看到"本地 60 / 远端 59"会以为丢提交（其实只是新增的没在这批里）。
+    if (tipNow !== headLocal) {
+      OUT('');
+      OUT(`  ⚠️ 推送期间本地分支前进了：推送时 ${headLocal.slice(0, 7)} → 现在 ${tipNow.slice(0, 7)}`);
+      OUT(`     上面各项只覆盖推送时的那 ${localN} 笔；新增的部分再跑一次 npm run mirror 即可同步。`);
+      OUT('     （这不是失败 —— 本检查已按推送时的快照对齐，不与实时状态混比。）');
+    }
   }
   OUT('');
   OUT(`API 调用次数: ${callCount}`);
