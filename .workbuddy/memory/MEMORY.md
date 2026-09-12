@@ -47,20 +47,24 @@
 
 ## 代码结构与工程化
 - git on `main`。`.gitignore` 忽略 kb.db/kb_*_state.json 等;**kb_inbox.md/kb_distilled.md/memory/ 必须入库**。
-- ⚠️ **无远端 tracking 分支**(`git rev-list --left-right origin/main...main` 失败)。`npm run mirror`(REST API,因本机 github.com:443 被阻断)/`npm run backup`(本地 bundle)均**未纳入常规流程**,有单点丢失风险。
-- `lib/` 域模块:config(单一真源,`WORKSPACE=path.resolve(__dirname,'..')`)/state(单例,**禁 new Map**)/http/auth/db/hermes/ollama/cloud/knowledge/skills/maintenance/parse/router/gateway/safety/usage。`lib/routes/*` 39 端点。KB 检索逻辑=`lib/knowledge.js`(非 kb.js)。
+- **异地镜像已通(2026-09-12 22:34 首次完整推送)**：`npm run mirror`(REST API,因本机 github.com:443 被阻断)。远端 `2276304874-afk/hermes-agent`(私有)HEAD=`565f41c`,根树 sha `8c520852` 与本地**逐字节一致**,57/57 提交树一致。⚠️ **提交 sha 两边必然不同**(GitHub 把提交时间归一 UTC,本地是 +0800,且差异沿 parent 链级联)→ **判断镜像是否最新只能比「根树 sha」**;`git status`/`branch -vv`/`origin/main..main` 全是结构性噪声(本地没有该 tracking ref,`fetch` 需要被阻断的 github.com:443)。判据写在 `scripts/push-via-api.js` 头部。
+- `lib/` 域模块:config(单一真源,`WORKSPACE=path.resolve(__dirname,'..')`)/state(单例,**禁 new Map**)/http/auth/db/hermes/ollama/cloud/knowledge/skills/maintenance/parse/router/gateway/safety/usage/**checkpoints/stopjudge**。`lib/routes/*` **52 端点**。KB 检索逻辑=`lib/knowledge.js`(非 kb.js)。
 - 前端三不变量:①head 内联主题+版本戳(不可外移);②`/app.js` 在 body 末不加 defer/async;③不改 ES module。`npm run check` 覆盖全部。
-- **测试七张网**(全绿才可 `git commit`):`npm test`(node:test,101)/`npm run smoke`(路由 51)/`npm run ui`(浏览器 38)/`npm run health`(21)/`npm run test:safety`(hook 6)/`npm run test:stop`(9)/`npm run test:chat`(契约 6)。⚠️ 本机 `node --test` 须写 `node --test test/*.test.js`(目录被当模块路径)。
+- **测试七张网**(全绿才可 `git commit`,2026-09-12 22:05 实测):`npm test`(node:test,**166**)/`npm run smoke`(路由 **53**)/`npm run ui`(浏览器 **62**)/`npm run health`(**31**)/`npm run test:safety`(hook **6**)/`npm run test:stop`(**9**)/`npm run test:chat`(契约 **6**)。⚠️ 本机 `node --test` 须写 `node --test test/*.test.js`(目录被当模块路径)。⚠️ `npm run ui` 依赖 `$HOME/.hermes/ui_token`;**手敲 `node test/ui.smoke.js` 漏传 token 会假报一片 401**,必须用 npm script。
 
 ## 模型与 Ollama
 - 主模型 `hermes-local-gemma4`(base gemma4:e4b,128K ctx)。⚠️ 工具型 agent 勿关 CoT:仅 `reasoning_effort:"none"` 生效,`think:false` 被忽略;关后小模型只说不做→记忆假死。
 
 ## 工程纪律(血泪)
 - **永不并行 Edit 同文件**(竞态丢更新;success 但内容没变=过期快照)。一消息块一文件一 Edit。
+- ⚠️ **前台 Bash 有 ~120 秒硬上限**:超过即 SIGKILL(exit 137,输出丢失),工具参数里的 `timeout` **不生效**。任何预计 >2min 的命令(推送/备份/全量构建)一律 `run_in_background: true` + 输出重定向到文件,再读文件看进度。监控用的 `sleep N` 也受同一上限约束(实测 `sleep 120` 被杀,`sleep 95` 安全)。
+- ⚠️ **进程无声消失先怀疑「日志缓冲」而不是「逻辑卡死」**:stdout 被重定向/管道时是块缓冲,最后几十行不落盘 → 看起来"卡在某一步"。长任务脚本用 `fs.writeSync(1, …)`;判活要看**进程是否还在**(`pgrep -f`)+ 文件日志,不能只看日志末行。
 - 进程存活查 `lsof -nP -iTCP:4173 -sTCP:LISTEN` + `/api/health` uptimeSec 递增;`launchctl print gui/$(id -u)/<label>` 核验注册(非 `launchctl list`)。
 - 旧实例占端口→测新代码前务必重启(kickstart 愈孤儿 SSE 子进程)。
 - plist 内 `<array>/<dict>` 禁 XML 注释(plutil 过,launchd EX_CONFIG)。
 - 含中文 bash:`${VAR}` 勿写 `$VAR` 后接全角;`grep -c` 无匹配退出码 1,用 `F=$(grep -c x f 2>/dev/null); F="${F:-0}"`。
+- ⚠️ **本 shell 里直接调 `grep`/`rg` 可能静默返回空**(实测同一文件同一模式,工具版 Grep 有命中、bash `grep` 却输出为空)——排查内容用 Grep 工具,别用 bash grep。另:`cat -A` 在 macOS BSD 不存在(只有 `-benstuv`)。
+- ⚠️ zsh 里 `PIPESTATUS` 无效(应为小写数组 `pipestatus`);要拿退出码就别接管道,或 `cmd > f 2>&1; echo $?`。
 
 ## 崩溃归因(P0-2)
 根因:catch 二次写头→`ERR_HTTP_HEADERS_SENT`→unhandledRejection→退出。加固:sendJSON/sse 前置 `headersSent/writableEnded` 检查;req/res 挂 error 监听;readBody 处理 aborted/close;active 清理单出口。死亡归因看 stderr `[lifecycle]` 行。
@@ -70,6 +74,10 @@
 
 ## 备份与镜像
 `npm run backup`(本地 bundle,`git clone <bundle>` 还原);`npm run mirror`(GitHub `2276304874-afk/hermes-agent`,经 REST API 非 git push——本机 github.com:443 被阻断)。非 ASCII 路径用 `git ls-tree -r -z`。
+- **镜像推送的成本与时长**:**每次整体重推,无增量**(提交 sha 不对齐,增量在 Git Data API 上无从谈起)——实测 723 次 API 调用、**约 8 分钟**(317 个去重 blob + 57 次提交建树)。所以别频繁推;改完一批再推一次。
+- ⚠️ **别在前台跑**:执行环境对前台 Bash 有 **~120 秒硬上限**,超了直接 SIGKILL(输出还会丢),`timeout` 参数**不生效**。必须 `run_in_background: true` 且把日志**重定向到文件**,然后读文件看进度。
+- ⚠️ **日志静默死亡陷阱**:`process.stdout.write` 在被重定向/管道时是**块缓冲**,进程中途死掉会表现为"日志停在某一行"→ 把「已死」伪装成「卡住」,排查方向全错。长任务脚本的日志一律用 `fs.writeSync(1, …)`。详见 `scripts/push-via-api.js` 头部。
+- 本机 api.github.com 往返实测 **0.6s / 最慢 2.7s**(30 次序列探针,直连与走环境代理均 30/30 成功);环境有沙箱透明代理(`HTTP(S)_PROXY=127.0.0.1:54xxx`),但 **node 的 `fetch`(undici) 默认不读代理变量**,`gh`/`curl` 会读——排查网络时别把两者的行为混为一谈。
 
 ## agent 能力三件套（2026-09-12）
 - selfcheck.js（网页自检：截图+console 错误，ok:true 才交付）/ repomap.js（仓库地图：目录+符号索引）/ code-review 技能（🔴🟡🟢结构化报告）——三个技能都在 ~/.hermes/skills/，脚本在项目 scripts/。
@@ -82,8 +90,20 @@
 - launchd 服务的 PATH 不含 /opt/homebrew/bin：两个 plist 已显式注入 PATH，装新 CLI 工具（rg 等）后 agent 即可用。
 
 ## 原生能力审计清单（2026-09-12 实测，hermes 升级后需复查）★
-- 给方案前先查原生子命令，勿重造轮子：hermes checkpoints（影子 git + /rollback，实测 0 B 休眠）/ curator（技能治理，需 adopt 才管我们的技能）/ backup（引擎侧 zip，不含项目源码）/ journey / usage / insights。
-- 项目侧备份 = bash backup.sh（本地 bundle，同盘不防磁盘故障）；异地 = npm run mirror（REST API 推 GitHub；本机 github.com:443 阻、api.github.com 通）。main 无 upstream，从未同步过。
+- 给方案前先查原生子命令，勿重造轮子：hermes checkpoints（影子 git + /rollback，**2026-09-12 晚已唤醒并接进 UI**）/ curator（技能治理，需 adopt 才管我们的技能，agent-created 仍=0）/ backup（引擎侧 zip，不含项目源码）/ journey / usage / insights。
+- 项目侧备份 = bash backup.sh（本地 bundle，同盘不防磁盘故障）；异地 = npm run mirror（REST API 推 GitHub；本机 github.com:443 阻、api.github.com 通）。**镜像已于 2026-09-12 晚首次推通**（远端 HEAD `565f41c`，57 提交）。
+
+## 检查点回退 + 停止条件裁判（2026-09-12 晚落地）★★★
+> 真源文档 `docs/checkpoints.md`；代码 `lib/checkpoints.js` / `lib/stopjudge.js` / `lib/routes/checkpoints.js`。
+- **休眠真因是「官方默认关闭」**，不是坏了：`checkpoints_enabled: bool = False`（`run_agent.py:269` 构造默认），v2 起 opt-in。配 `checkpoints.enabled: true` 即唤醒（影子库落 `~/.hermes/checkpoints/store`，单个共享 bare git 库，跨项目按内容去重，不碰项目自己的 `.git`）。
+- ⛔ **`/rollback` 在 Web UI 链路到不了**：gateway 的 `api_server` 适配器**不做斜杠命令分发**——发 `/version` 会被当**普通消息喂给模型**（模型还编了身份）。`/rollback` 只在 `_IDLE_COMMANDS` 里由平台管线派发（`run_busy.py:704`→`slash_commands.py:669`）。故 Node 侧自实现，**不要试图转发斜杠命令**。
+- ★★ **两道守卫，缺一不可**（一次真实事故换来）：共享裸库让 store 里任何提交对**任何 workdir** 都 `cat-file` 可见，只检查"提交存在"就会把整个项目树 checkout 进无关目录（实测：对未注册的 `/tmp` 调 restore → 118 个文件写进 `/private/tmp`）。① workdir 必须是**已注册项目**；② 提交必须在**该项目自己的 ref 历史**里（`git merge-base --is-ancestor`）。
+- ★★ **`terminal.cwd` 是检查点能触发的前置条件**（隐蔽耦合）：`$HOME` 与 `/` 是检查点**硬护栏**（永不快照），而 gateway 模式 agent cwd 默认落 `$HOME` → **快照永不触发**，同时还会往家目录乱写。已在 `config.yaml` 钉 `terminal: cwd: <项目绝对路径>`。⚠️ `-z --in` 不约束 terminal cwd → cwd 真源现在**有两处**。
+- ⚠️ 路由必须**精确匹配**：`lib/router.js` 是前缀匹配 + 首命中即处理，`router.add('GET','/api/checkpoints',…)` 会吞掉 `/list` `/plan` `/diff` → 用 `(req) => req.url.split('?')[0] === '/api/checkpoints'`。
+- ⚠️ 影子库 git 调用一律 `GIT_CONFIG_GLOBAL/SYSTEM=/dev/null` + `GIT_CONFIG_NOSYSTEM=1` + 清 `GIT_*` 泄漏——**不让使用者 gitconfig（gpg/hooks/credential helper）介入后台快照**。
+- **停止条件裁判用的是确定性判据，不是审计推荐的 LLM 冷裁判**（诚实记录）：D1 同工具调用重复≥3→warn；D2 同调用且**返回正文完全相同**≥2→hard；D3 单 run 工具调用>40→hard。零额外模型调用/零额外延迟。换方案理由：① 本地 4B 自评不可靠，冷裁判可能一样乐观；② 每次 run 多几秒~几十秒，而首字延迟 45s 已是最大痛点；③ 可单测可复现。冷裁判作为独立"复盘"入口**未关闭**。
+- **只报告不中断**（`HERMES_JUDGE_ABORT=1` 才 abort）；判据**高精度低召回**——误报会让提示失去信任（狼来了），故测试多数在验"不该报的都不能报"。严重度单调只升不降；同 code 只报一次。⚠️ 结果归因必须用 `lastSig`（Map 保插入序，重复调用老签名时它不在末尾）。
+- **配置真源在仓库外**：`checkpoints.*` 与 `terminal.cwd` 写在 `~/.hermes/config.yaml`（含 gateway key，本就不该入库）→ **换机器重装不会自动复现**。防漂移 = `npm run health` §10 三条断言（terminal.cwd / checkpoints.enabled / 模块导出）+ hermes `state-snapshots`。"重装即复现"需在 `setup.sh` 加幂等补写，**尚未做**。
 
 ## 上下文预算的第二处坑（2026-09-12 晚实测）★★
 - 改 Ollama 模型的 num_ctx 只解决一半：hermes 侧上下文窗口键若不同步，引擎仍按旧窗口算预算（tools/budget_config.py: budget_for_context_window，turn_budget = 窗口 30%，floor 16K 字符）。**实际是六处**（见文末「阶段一」章节）——原写「四处」有漏。改完必须用引擎解析路径复核，不能只看 config。
