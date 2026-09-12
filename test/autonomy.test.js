@@ -11,20 +11,20 @@
  */
 const test = require('node:test');
 const assert = require('node:assert');
-const { AUTONOMY_PREAMBLE, META_GUARD, withAutonomy } = require('../lib/autonomy');
+const { AUTONOMY_PREAMBLE, META_GUARD, STOP_RULES, withAutonomy } = require('../lib/autonomy');
 
-test('autonomous=false 时原 prompt + 守卫尾缀', () => {
+test('autonomous=false 时原 prompt + 停止条件 + 守卫尾缀', () => {
   const p = '帮我修个 bug';
-  assert.strictEqual(withAutonomy(p, false), p + META_GUARD);
-  assert.strictEqual(withAutonomy(p, undefined), p + META_GUARD);
+  assert.strictEqual(withAutonomy(p, false), p + STOP_RULES + META_GUARD);
+  assert.strictEqual(withAutonomy(p, undefined), p + STOP_RULES + META_GUARD);
 });
 
-test('autonomous=true 时前导 + 空行 + 原 prompt + 守卫尾缀', () => {
+test('autonomous=true 时前导 + 空行 + 原 prompt + 停止条件 + 守卫尾缀', () => {
   const p = '帮我修个 bug';
   const out = withAutonomy(p, true);
   assert.ok(out.startsWith(AUTONOMY_PREAMBLE));
-  assert.ok(out.endsWith(p + META_GUARD));
-  assert.strictEqual(out, AUTONOMY_PREAMBLE + '\n\n' + p + META_GUARD);
+  assert.ok(out.endsWith(p + STOP_RULES + META_GUARD));
+  assert.strictEqual(out, AUTONOMY_PREAMBLE + '\n\n' + p + STOP_RULES + META_GUARD);
 });
 
 test('模板字节稳定（两次调用逐字节一致）', () => {
@@ -49,6 +49,17 @@ test('META_GUARD 守门：封元技能误路由的关键句齐全', () => {
   }
 });
 
-test('prompt 为空串时 autonomous=true 仍返回前导+守卫（调用方上游已拦空 prompt）', () => {
-  assert.strictEqual(withAutonomy('', true), AUTONOMY_PREAMBLE + '\n\n' + META_GUARD);
+test('STOP_RULES 守门：三条停止条件与"不要空转"关键句齐全', () => {
+  for (const kw of ['停止条件', '完成标准', '验证方式', '没有带来新信息', '失败 3 次', '不要用「再试一次」代替思考']) {
+    assert.ok(STOP_RULES.includes(kw), `停止条件缺少关键句: ${kw}`);
+  }
+});
+
+test('停止条件在两种模式下都必须注入（跑偏不只发生在自主模式）', () => {
+  assert.ok(withAutonomy('x', false).includes(STOP_RULES));
+  assert.ok(withAutonomy('x', true).includes(STOP_RULES));
+});
+
+test('prompt 为空串时 autonomous=true 仍返回前导+尾缀（调用方上游已拦空 prompt）', () => {
+  assert.strictEqual(withAutonomy('', true), AUTONOMY_PREAMBLE + '\n\n' + STOP_RULES + META_GUARD);
 });

@@ -257,6 +257,51 @@ else
   warn "找不到元技能 SKILL.md，跳过（是否换过 skills 目录？）"
 fi
 
+# ---------- 10. 本轮新增配置不变量 ----------
+# 同样各对应一次真实故障，都是「修好了但怕被静默改回去」的类型。
+echo
+echo "[10] 检查点与工作目录不变量"
+if [ -f "${CFG}" ]; then
+  # 10.1 terminal.cwd 必须是绝对路径且等于本工作区。
+  # 故障史：gateway 模式下 agent 的 cwd 默认落在 $HOME。后果有二 ——
+  #   ① agent 说"在当前目录创建文件"会往家目录乱写；
+  #   ② $HOME 是检查点的硬护栏（ensure_checkpoint 里 abs_dir in {"/", home} 直接跳过），
+  #      于是影子快照**永不触发**，回退能力形同虚设。修法就是钉死 terminal.cwd。
+  # 用 awk 精确取 terminal: 块下的 cwd，避免误抓 config 里其它层级的 cwd 键。
+  TERM_CWD="$(awk '/^terminal:/{f=1;next} /^[^[:space:]#]/{f=0} f && /^[[:space:]]*cwd:/{sub(/^[[:space:]]*cwd:[[:space:]]*/,"");print;exit}' "${CFG}" 2>/dev/null)"
+  if [ "${TERM_CWD}" = "${WS}" ]; then
+    ok "terminal.cwd 钉死在工作区（agent 不会写到家目录，检查点可触发）"
+  elif [ -z "${TERM_CWD}" ]; then
+    bad "terminal.cwd 缺失 —— agent cwd 会落到 \$HOME，家目录是检查点硬护栏，快照将永不触发"
+  else
+    bad "terminal.cwd=${TERM_CWD} 与工作区 ${WS} 不一致（检查点会登记到别的目录）"
+  fi
+  # 10.2 checkpoints.enabled 必须为 true。
+  # 故障史：官方默认 checkpoints_enabled=False（run_agent.py 构造参数），v2 起 opt-in。
+  # 我们一直以为"这功能是坏的"，实为默认关闭 —— 影子库 0 B / 0 项目空转。
+  CP_EN="$(awk '/^checkpoints:/{f=1;next} /^[^[:space:]#]/{f=0} f && /^[[:space:]]*enabled:/{sub(/^[[:space:]]*enabled:[[:space:]]*/,"");print;exit}' "${CFG}" 2>/dev/null)"
+  if [ "${CP_EN}" = "true" ]; then
+    ok "checkpoints.enabled = true（影子快照写入开）"
+  else
+    bad "checkpoints.enabled=${CP_EN:-缺失} —— 默认关闭，回退能力不会工作"
+  fi
+else
+  bad "找不到 ${CFG}"
+fi
+# 10.3 检查点/裁判两个新模块的导出形状完好。
+# 意义：导出被改名时 server.js 的接线会静默失效（路由注册不到、裁判不生效），
+# 单测跑在直接 require 上反而发现不了。这里锁住接线依赖的那个名字。
+if node -e "
+  const cp = require('${WS}/lib/checkpoints.js');
+  const sj = require('${WS}/lib/stopjudge.js');
+  const need = [['checkpoints', cp, 'listCheckpoints'], ['stopjudge', sj, 'createJudge']];
+  for (const [n, m, k] of need) if (typeof m[k] !== 'function') { console.error(n + '.' + k); process.exit(1); }
+" 2>/dev/null; then
+  ok "checkpoints/stopjudge 模块导出完好（server.js 接线依赖项在）"
+else
+  bad "checkpoints 或 stopjudge 模块导出缺失 —— 路由接线会静默失效"
+fi
+
 # ---------- 汇总 ----------
 echo
 echo "=============================================="

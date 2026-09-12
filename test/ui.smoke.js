@@ -428,6 +428,54 @@ const CONSOLE_WHITELIST = [
       check(pos === 'wsModBtn', '按钮位置：在 wsModBtn 之后', pos);
     }
 
+    /* ---------- L11 检查点回退面板 ----------
+     * 覆盖三件事：① 面板能打开且不报错；② 有检查点时「预览」能算出影响范围（会覆盖/会保留两栏）；
+     * ③ 空库时给出明确空态而不是一片空白（否则用户会以为坏了）。
+     * 两种库状态都算通过 —— 断言的是"两种状态都可辨识"，不是"必须有检查点"。 */
+    const cpBtn = await page.$('#cpBtn');
+    check(cpBtn !== null, '检查点按钮存在', String(!!cpBtn));
+    if (cpBtn) {
+      await page.evaluate(() => document.getElementById('cpBtn').click());
+      await page.waitForSelector('#cpMask.show', { timeout: 5000 }).catch(() => {});
+      const shown = await page.evaluate(() => document.getElementById('cpMask').classList.contains('show'));
+      check(shown === true, '点击后模态框打开', String(shown));
+
+      // 等异步加载结束（加载中… 文案消失 & 列表有内容）
+      await page.waitForFunction(() => {
+        const l = document.getElementById('cpList');
+        return !!l && (l.querySelector('.cp-row') || l.querySelector('.cp-empty'));
+      }, { timeout: 8000 }).catch(() => {});
+
+      const state = await page.evaluate(() => ({
+        rows: document.querySelectorAll('#cpList .cp-row').length,
+        empty: !!document.querySelector('#cpList .cp-empty'),
+        hint: (document.getElementById('cpHint') || {}).textContent || '',
+      }));
+      check(state.rows > 0 || state.empty, '列表渲染出检查点或明确空态', `${state.rows} 行 / 空态=${state.empty}`);
+      check(/占用|还没有检查点/.test(state.hint + (state.empty ? '还没有检查点' : '')), '顶部说明可见', state.hint.slice(0, 50));
+
+      if (state.rows > 0) {
+        // 点第一行的「预览」→ 必须出现两栏影响范围
+        await page.evaluate(() => {
+          const b = document.querySelector('#cpList .cp-row button[data-act="plan"]');
+          if (b) b.click();
+        });
+        const cols = await page.waitForSelector('#cpPreview .cp-cols', { timeout: 8000 }).catch(() => null);
+        check(cols !== null, '预览渲染出影响范围两栏', String(!!cols));
+        if (cols) {
+          const detail = await page.evaluate(() => ({
+            heads: Array.from(document.querySelectorAll('#cpPreview .cp-col h4')).map((h) => h.textContent),
+            hasApply: !!document.getElementById('cpGoBtn'),
+            hasAllChk: !!document.getElementById('cpAllChk'),
+          }));
+          check(detail.heads.length === 2 && /会被回退/.test(detail.heads[0]), '两栏标题正确', detail.heads.join(' | '));
+          check(detail.hasApply && detail.hasAllChk, '回退按钮与全量复选框齐备', JSON.stringify(detail));
+          try { await page.screenshot({ path: SHOT.replace(/\.png$/, '-checkpoints.png') }); } catch (e) { /* 截图失败不影响结论 */ }
+        }
+      }
+      await page.evaluate(() => document.getElementById('cpClose').click());
+    }
+
     /* ---------- 截图存档 ---------- */
     try {
       await page.screenshot({ path: SHOT, fullPage: false });

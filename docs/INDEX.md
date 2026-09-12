@@ -1,8 +1,9 @@
 # 文档索引 · 赫尔墨斯特工
 
 > 本文件只做一件事：**30 秒内告诉你该看哪份**。
-> 最后更新：2026-09-12 晚（新增 `docs/PROJECT-AUDIT-2026-09-12.md`，整体审计 + MiMo-Code 对照 + 优先级）。
-> 此前：`ACTION_PLAN-2026-09-12.md` 为有效待办清单。新增根目录 `.md` 时请回到这里补一行。
+> 最后更新：2026-09-12 晚（新增 `docs/checkpoints.md`：检查点回退 + 停止条件裁判的接线真源）。
+> 此前：新增 `docs/PROJECT-AUDIT-2026-09-12.md`，整体审计 + MiMo-Code 对照 + 优先级。
+> 再此前：`ACTION_PLAN-2026-09-12.md` 为有效待办清单。新增根目录 `.md` 时请回到这里补一行。
 
 ---
 
@@ -14,6 +15,7 @@
 | `项目导读.md` | 项目本体说明书：架构、目录、API 清单、启动方式、UI 结构 | **第一次接触项目**；想知道「这东西由什么组成」 |
 | `AGENT_USER_GUIDE.md` | **使用者手册**：界面三大块、能/不能干什么、9 条经验、自救清单 | **日常使用**；想知道「怎么让特工干得更好 / 卡住了怎么办」 |
 | `docs/AUTONOMY_POLICY.md` | **放手自主执行安全方案**：三色权限清单（绿全自动/黄5分钟放行/红必停）、五道检查点、分级回滚、时长与范围上限 | 想让特工**无人值守连续干活**之前必读；给自主任务写约束 prompt 时照抄 §六 模板 |
+| `docs/checkpoints.md` | **检查点回退 + 停止条件裁判**：影子库契约、双重守卫、`terminal.cwd` 前置条件、三类判据与「只报告不中断」取舍、API/UI 接线 | 改回退逻辑、调裁判阈值，或排查「检查点列表为什么是空的」时看 |
 | `docs/MODEL_BENCH-2026-09-12.md` | **14b 模型对比实验**：4 模型微基准 + agent 级实测，gemma4 全面胜出、qwen3.5:9b 收编为备胎、14b 在 16G 不可用 | **换模型之前必读**；含可复测脚本 `scripts/model-bench.js` / `model-bench-agent.sh` |
 | `UPGRADE_ROADMAP.md` | 升级总路线图：A 必改 / B UI / C 能力 / D 工程 + 阶段 E 模型换装 | 想知道**能力与工程演进到哪一步、为什么这么走** |
 | `docs/INTEGRATION_PLAN.md` | 外部仓库接入方案：对齐《AI Agent 技术栈 GitHub 仓库清单》，逐项列可接入性与偏好算法 | 想给 agent **接新能力**时看（含 §五 15 分钟的先决验证实验） |
@@ -47,13 +49,18 @@
 
 | 命令 | 覆盖 | 当前基线 |
 |---|---|---|
-| `npm test` | 纯函数单测（解析 / 用量 / HTTP / 接线自检） | 见输出 `# pass` 行 |
-| `npm run smoke` | 路由清单冒烟（每条路由都被正确登记；KB 认证不变量） | 同上 |
-| `npm run ui` | 无头 Chrome 前端冒烟（L1 传输 / L2 执行 / L3 渲染 / L4 健康 / L5 降级 / L6 KB 页） | 同上 |
-| `npm run health` | 运行时自检：守护 / 端口 / 接口 / 本次启动的日志健康（= `bash healthcheck.sh`） | 同上 |
+| `npm test` | 纯函数单测（解析 / 用量 / HTTP / 接线 / 检查点 / 裁判 / 自主纪律 / 工作区…） | 166 例全绿 |
+| `npm run smoke` | 路由清单冒烟（每条路由都被正确登记；KB 认证不变量） | 53 例全绿 |
+| `npm run ui` | 无头 Chrome 前端冒烟（L1 传输 / L2 执行 / L3 渲染 / L4 健康 / L5 降级 / L6 KB 页 / L11 检查点面板） | 62 例全绿 |
+| `npm run health` | 运行时自检：守护 / 端口 / 接口 / 日志健康 / 备份产物 / 引擎配置与检查点不变量（= `bash healthcheck.sh`） | 31 例全绿 |
+| `npm run test:safety` | 高危命令拦截 hook（fail-closed） | 6 例全绿 |
+| `npm run test:stop` | `/api/stop` 契约（SSE 收尾） | 9 例全绿 |
+| `npm run test:chat` | 危险放行写盘契约（`ui_bypass_sessions.json`） | 6 例全绿 |
 | `npm run check` | 全量语法检查（server + lib + routes + 前端 + 脚本 + 测试） | 退出码 0 |
 
-> 缺依赖时 `npm run ui` 会**显式 SKIP 并声明"前端未经验证"**，不会假装通过。
+> **七张网全绿才可 `git commit`。** 缺依赖时 `npm run ui` 会**显式 SKIP 并声明"前端未经验证"**，不会假装通过。
+> ⚠️ 本机 `node --test` 必须写 `node --test test/*.test.js`（把目录当模块路径会报错）。
+> ⚠️ `npm run ui` 依赖 `$HOME/.hermes/ui_token`；手敲 `node test/ui.smoke.js` 漏传 token 会假报一片 401。
 
 ---
 

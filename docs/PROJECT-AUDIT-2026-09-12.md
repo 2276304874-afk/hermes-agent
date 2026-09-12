@@ -93,9 +93,9 @@
 | 压缩续聊 | ✅ | `/api/session/compact` E2E 3.2s |
 | 工具轨迹折叠 | ✅ | 汇总胶囊 + 计数，playwright 端到端验证 |
 | 上下文预算正确对齐 | ✅ | 09-12 21:30 修复：六处 32768，引擎解析值实测 = 32768（曾为 ❌，见 §6-1） |
-| 文件级回退 | ❌（能力存在但休眠） | `hermes checkpoints` 0 B |
-| 结构化任务清单 | ❌ | 任务只是 prompt 里的一串字符串 |
-| 停止条件判定 | ❌ | 无此机制，导致「乐观停止」（今日实测复发） |
+| 文件级回退 | ✅（09-12 晚唤醒） | `hermes checkpoints` 已 live + `/api/checkpoints/*` 6 端点 + UI 面板；曾为 ❌（能力休眠，见 §8 P1-1） |
+| 结构化任务清单 | ❌ | 任务只是 prompt 里的一串字符串（停止条件裁判未依赖它，见 §8 P1-2 的路线修正） |
+| 停止条件判定 | ✅（09-12 晚落地，非原方案） | `lib/stopjudge.js` 确定性三判据 D1/D2/D3，只报告不中断；原推荐的 LLM 冷裁判未做，理由见 §8 P1-3 |
 | 双轨备份 | ✅ | 项目侧 bundle **一直存在**（审计误判，见 §6 第 4 行更正）；引擎侧快照已补；两轨断言已加进 healthcheck |
 
 ---
@@ -104,11 +104,11 @@
 
 | 指标 | 数值 | 来源 |
 |---|---|---|
-| JS 代码量（含测试） | ~9,466 行 | `wc -l` |
-| 前端 app.js | 1,994 行（IIFE 单文件） | 同上 |
-| HTTP 端点 | 45 个 | `grep router.add` |
-| 测试基线 | **136 单测全绿** + 45 端点冒烟 + 55 UI + 21 health + 6 safety + 9 stop + 6 chat | 今日实测 |
-| 技能库 | 99 个顶层技能目录 / 5.6MB | `ls ~/.hermes/skills` |
+| JS 代码量（含测试） | 10,143 行 | `wc -l server.js lib/**/*.js public/*.js scripts/*.js test/*.js` |
+| 前端 app.js | 2,207 行（IIFE 单文件） | 同上 |
+| HTTP 端点 | 52 个 | `grep -c router.add lib/routes/*.js` |
+| 测试基线 | **166 单测全绿** + 53 端点冒烟 + 62 UI + 31 health + 6 safety + 9 stop + 6 chat | 09-12 22:05 实测 |
+| 技能库 | 192 叶子技能 / 43.8MB（SKILL.md 正文仅 0.91MB） | `ls ~/.hermes/skills` |
 | 静态 prompt 开销 | system 27K 字符 + 工具 schema 37K + 技能索引 14K ≈ **17K token** | 今日排障实测 |
 | 首字延迟 | avgFirstTokenSec24h ≈ **45.25s** | `/api/usage` |
 | 生成速度 | 17.5 tok/s | 同上 |
@@ -127,7 +127,7 @@
 | 3 | `cron: daily_backup`（每天 02:00 复制 state.db） | 引擎侧每日快照 | `~/.hermes/backups/` **空目录**（建目录时间 09-10，零文件） | 引擎侧状态无备份 |
 | 4 | `bash backup.sh`（项目 bundle） | 项目离机还原点 | ⚠️ **更正：bundle 一直都在** —— 输出目录是仓库的**上级** `../_hermes-backups/`（审计时实有 5 份，最新 09-12 21:01）。初查在**仓库根**执行 `ls *.bundle` 查错了路径 | 项目侧备份**存在**；真正的问题是「有产物、但无流程无断言管它」——现已加 healthcheck 断言 + `npm run backup:all` 一键双轨 |
 | 5 | `npm run mirror`（异地镜像） | GitHub 异地 | `main` **无 upstream**，从未推送 | 唯一异地通道闲置；`mirror:dry` 实测可跑（277 文件） |
-| 6 | `hermes checkpoints`（影子 git + `/rollback`） | agent 改文件前自动快照 | **0 B / 0 项目 = 从未生效** | 「改坏了能回滚」能力全程闲置 |
+| 6 | `hermes checkpoints`（影子 git + `/rollback`） | agent 改文件前自动快照 | **[已修] 已 live**（547 KB / 5 提交 / 1 项目）；原为 0 B / 0 项目 | 真因是**官方默认关闭**（v2 起 opt-in），不是坏了；另需 `terminal.cwd` 钉在项目里否则 cwd 落 `$HOME` 触发不了。已接 UI，见 `docs/checkpoints.md` |
 | 7 | `hermes curator`（技能治理） | 定期剪枝/合并/归档 | ENABLED、每 7d，但 **agent-created=0**（124 技能全判为 bundled）→ **零作用** | 技能治理形同未开；需 `curator adopt` 才纳管 |
 | 8 | `skills.preload: [三个技能]` | 预加载降延迟 | 源码中**未见该键的解析逻辑**（疑似空转） | 至少是无收益配置，需实测确认 |
 | 9 | `monitoring: prometheus :9090` | 指标可观测 | 未见抓取端 | 空转 |
@@ -142,11 +142,11 @@ MiMo-Code = 小米对 `opencode` 的深度 fork（MIT，Bun/TS，终端 TUI）�
 
 | 能力域 | MiMo-Code 的做法 | 特工现状 | 差距性质 | 结论 |
 |---|---|---|---|---|
-| 停止条件 | `session/goal.ts`：`/goal` 设条件，**独立裁判模型**只读对话判 `ok/impossible`，`MAX_GOAL_REACT` 限重入 | 无 | 工程（可补） | ✅ **值得自建**（唯一真正缺的） |
-| 上下文压缩 | `session/overflow.ts`：按有效窗口 **90%** 触发，`COMPACTION_BUFFER 33K`、`OUTPUT_CAP 20K`，`compaction.max_context` 按模型调 | `micro_compact`（**配置错误地开着**）+ 手动压缩续聊 | 工程（已具备，未调准） | ⚠️ 先调参，别重造 |
-| 检查点/回退 | `src/snapshot` + `session/revert.ts`（文件级逐轮回滚） | hermes 原生 `checkpoints`（影子 git）+ `/rollback`，**但 0 B 休眠** | 工程（已具备，未唤醒） | ✅ 唤醒 + 接 UI，**不要自建** |
+| 停止条件 | `session/goal.ts`：`/goal` 设条件，**独立裁判模型**只读对话判 `ok/impossible`，`MAX_GOAL_REACT` 限重入 | **[已落地]** `lib/stopjudge.js` 确定性三判据（**未采用冷裁判模型**，理由见 §8-P1-3） | 工程（已补） | ✅ 唯一真缺口已补，方案更省 |
+| 上下文压缩 | `session/overflow.ts`：按有效窗口 **90%** 触发，`COMPACTION_BUFFER 33K`、`OUTPUT_CAP 20K`，`compaction.max_context` 按模型调 | `micro_compact`（**已改回关闭**）+ 手动压缩续聊 | 工程（已具备，未调准） | ⚠️ 先调参，别重造 |
+| 检查点/回退 | `src/snapshot` + `session/revert.ts`（文件级逐轮回滚） | hermes 原生 `checkpoints`（影子 git），**[已唤醒]** + 自建 Node 读写层接进 UI | 工程（已具备，已启用） | ✅ 已做；`/rollback` 在 Web UI 链路到不了，故未走斜杠命令 |
 | 结构化状态 | `checkpoint.md` 快照 + validator / retry / progress-reconcile 三件套 | 无；压缩续聊是一次性散文摘要 | 工程 | 🟡 最小版够用，勿抄三件套（过度设计） |
-| 任务追踪 | 树状任务 T1/T1.1，与检查点联动，恢复不丢进度 | 无结构化任务表 | 工程 | ✅ 停止条件裁判的**前置** |
+| 任务追踪 | 树状任务 T1/T1.1，与检查点联动，恢复不丢进度 | 无结构化任务表 | 工程 | 🟡 停止条件裁判已用确定性判据落地，**不再阻塞**；只剩摘要/进度载体价值 |
 | 技能检索 | `tool/skill-search.ts`：精确名/别名 + **BM25 相关度** + 阈值自动加载 + 多技能编排 | 索引常驻 + 手动 `skill_view` | 工程（我们**刻意不做**） | 🟡 192 技能以下收益有限；瓶颈在 description 质量，不在检索 |
 | 技能治理 | 内置技能 + 覆盖机制 + `MIMOCODE_DISABLE_*` | `hermes curator`（**未纳管**） | 工程（已具备，未启用） | ✅ `curator adopt` 即可 |
 | 记忆沉淀 | `/dream` 扫轨迹提炼记忆、`/distill` 把重复流程打包成技能 | 手动写 MEMORY.md / 日志 | 工程 | 🟡 可做小工具，优先级低于前几项 |
@@ -157,6 +157,7 @@ MiMo-Code = 小米对 `opencode` 的深度 fork（MIT，Bun/TS，终端 TUI）�
 | 平台能力 | 云语音（TenVAD+MiMo ASR）、桌面端、Smart 调度、会话分享/同步 | 无 | 主动放弃 | ❌ 违背 local-first，明确不做 |
 
 **一句话**：MiMo 的强项里，**一半是我们已有但没启用**（checkpoints / curator / 压缩参数），**一半是我们该主动放弃的**（云语音 / 多代理 / 平台化）；真正缺的只有「可判定的停止条件 + 结构化任务」这一条线。
+→ 09-12 晚更新：其中**检查点已唤醒、停止条件已补**（后者用了更省的确定性方案，未走 MiMo 的独立裁判模型）；「结构化任务」降为可选项。**唯一真缺口已闭合。**
 
 ---
 
@@ -192,20 +193,32 @@ MiMo-Code = 小米对 `opencode` 的深度 fork（MIT，Bun/TS，终端 TUI）�
 
 ### P1 · 可回滚与可判定（补能力）
 
-**P1-1 唤醒 `hermes checkpoints` 并接到 UI**
-- 做什么：查它为何 0 B（触发条件/配置），唤醒后在会话里给「回退到本轮之前」按钮，走原生 `/rollback`。
-- 利：拿到「agent 改坏了能一键回滚」这个天天用得上的能力；比自建 snapshot 便宜得多。
-- 弊与前提：得先搞清休眠原因，可能涉及 gateway 模式下的路径或开关；回退语义要写清（回退文件 ≠ 回退对话）。
+**P1-1 唤醒 `hermes checkpoints` 并接到 UI** —— ✅ **已落地（2026-09-12 晚）**
+- 实际做法：**没有走 `/rollback`**。实测确认 gateway 的 `api_server` 适配器不走斜杠命令分发
+  （发 `/version` 会被当普通消息喂给模型，模型还编了身份），`/rollback` 只在 `_IDLE_COMMANDS` 里由平台管线派发。
+  改为 Node 侧直接读写影子库：`lib/checkpoints.js` + `lib/routes/checkpoints.js`（6 端点）+ header 时钟图标面板。
+- 休眠真因：**官方默认关闭**（`checkpoints_enabled=False`，v2 起 opt-in），不是坏了。配 `checkpoints.enabled: true` 即唤醒。
+- 关键前置：`terminal.cwd` 必须钉在项目里 —— 否则 agent cwd 落 `$HOME`，而 `$HOME` 是检查点硬护栏，**快照永不触发**。
+- ⚠️ 事故记录：共享裸库让任意提交对任意 workdir `cat-file` 可见，初期只检查"提交存在"就回退，
+  实测把整个项目树 checkout 进了 `/private/tmp`（118 文件）。已加**双重守卫**（须为已注册项目 + 提交须在该项目 ref 历史内）。
+- 详见 `docs/checkpoints.md`。判据：`node --test test/checkpoints.test.js`（14 例）+ `npm run ui` 的 L11 层。
 
-**P1-2 结构化任务清单**
-- 做什么：让每轮任务以结构化形式存在（目标 / 验收条件 / 已完成 / 待办），而非 prompt 里的一串字符串。
-- 利：它是**停止条件裁判的前置**；也让交付摘要、进度显示、压缩续聊都有可靠依据。
-- 弊与前提：需要约束模型稳定输出结构（小模型易漂），建议用固定模板 + 单测覆盖解析。
+**P1-2 结构化任务清单** —— ⏸ **未做，且路线已修正**
+- 原定位是「停止条件裁判的**前置**」。本轮 P1-3 改用**确定性判据**（见下），
+  不依赖结构化任务表即可工作，故该前置关系**不再成立**。
+- 仍然值得做的理由（与裁判无关）：交付摘要、进度显示、压缩续聊都缺一个可靠的进度载体。
+- 弊与前提不变：需要约束模型稳定输出结构（小模型易漂），建议固定模板 + 单测覆盖解析。
 
-**P1-3 停止条件裁判**
-- 做什么：自主执行开启时，run 结束前用同模型跑一次**冷裁判**——只喂对话记录 + 停止条件，不给工具、不给任务提示，输出 `{ok | impossible | reason}`；不通过则把 reason 当反馈重入，**上限 N 次**。
-- 利：直接治今天复发的两类病（把「技能已加载」当交付、幻觉出无关任务）。
-- 弊与前提：① 裁判与干活的是同一个 4B，可能一样乐观 → 必须只读对话、无工具、限重入；② 每次多几秒；③ 条件过宽形同虚设、过严则空转。**没有 P1-2 就别做这个**，否则无判定依据。
+**P1-3 停止条件裁判** —— ✅ **已落地，但换了方案（2026-09-12 晚）**
+- 原方案：run 结束前用同模型跑**冷裁判**（只读对话、无工具，判 `{ok|impossible|reason}`，限重入）。
+- 实际方案：`lib/stopjudge.js` **确定性三判据**，零额外模型调用、零额外延迟：
+  D1 同一工具调用重复 ≥3 → `warn`；D2 **同一调用且返回正文完全相同** ≥2 → `hard`；D3 单 run 工具调用 >40 → `hard`。
+- 换方案的理由：① 本地 4B 自评不可靠，冷裁判可能一样乐观（原方案自己列的弊）；
+  ② 每次 run 多几秒~几十秒，而首字延迟 45s 已是最大痛点；③ 确定性判据可单测、可复现。
+- 设计取舍：**只报告不中断**（`HERMES_JUDGE_ABORT=1` 才 abort）；
+  判据高精度低召回 —— 误报会让提示失去信任（狼来了），测试多数在验"不该报的都不能报"。
+- 冷裁判**未关闭**：若要补，应作为独立"复盘"入口（事后判，不阻塞当下）。
+- 详见 `docs/checkpoints.md` §三。判据：`node --test test/stopjudge.test.js`（14 例）。
 
 **P1-4 `hermes curator adopt`**
 - 做什么：把我们的技能纳入 curator 管理，先 `curator usage` 看遥测，`consolidate` 保持 off（LLM 合并是 opt-in）。
@@ -245,12 +258,13 @@ MiMo-Code = 小米对 `opencode` 的深度 fork（MIT，Bun/TS，终端 TUI）�
 4. 提交今天全部改动（分三笔：UI 精修 / 能力三件套 / 排障修复）
 > 判据：`ollama ps` 与配置一致；一次真实长任务不再出现「用户任务被逐出」；`healthcheck.sh` 三条断言全绿。
 
-**阶段二：可回滚 + 可判定（3 项）**
-5. 唤醒 checkpoints → UI 回退按钮（P1-1）
-6. 结构化任务清单（P1-2）
-7. 停止条件裁判（P1-3）
-8. `curator adopt`（P1-4）
-> 判据：能一键回退 agent 的文件改动；自主任务不再"乐观停止"（可用固定反例集复测）。
+**阶段二：可回滚 + 可判定（3 项）—— 进展 2026-09-12 晚**
+5. ✅ 唤醒 checkpoints → UI 回退按钮（P1-1）—— 已完成，实测 live + UI 面板 + 14 例单测
+6. ⏸ 结构化任务清单（P1-2）—— **未做**，且已不再是 P1-3 的前置（裁判改用确定性判据）
+7. ✅ 停止条件裁判（P1-3）—— 已完成，**方案替换为确定性三判据**（非 LLM 冷裁判），14 例单测
+8. ⬜ `curator adopt`（P1-4）—— 待做（agent-created=0 时零作用）
+> 判据：✅ 能一键回退 agent 的文件改动（面板 + 双重守卫）；✅ 打转可被外部机制看见（只报告不中断）。
+> 原判据「自主任务不再"乐观停止"」需用固定反例集复测 —— 尚未做该复测。
 
 **阶段三：降本 + 探边界（有余力）**
 9. `proactive_prune` 调参 + 前端模块化（P2-3 / P2-4）
@@ -264,10 +278,10 @@ MiMo-Code = 小米对 `opencode` 的深度 fork（MIT，Bun/TS，终端 TUI）�
 ```bash
 ollama ps                                   # 模型实载上下文是否为 32768
 hermes prompt-size                          # 静态 prompt 开销（加功能前后必看）
-hermes checkpoints status                   # 是否仍为 0 B
+hermes checkpoints status                   # 应为 live（非 0 B；09-12 已唤醒）
 hermes curator status                       # agent-created 是否 > 0
 ls -la ~/.hermes/backups/                   # 引擎侧备份是否有产物
-ls -la *.bundle backups/ 2>/dev/null        # 项目侧 bundle 是否存在
+ls -la ../_hermes-backups/*.bundle          # 项目侧 bundle（注意在仓库**上级**目录）
 git branch -vv                              # main 是否已有 upstream
-npm test && npm run smoke && npm run ui     # 136 / 45 / 55 全绿
+npm test && npm run smoke && npm run ui && npm run health   # 166 / 53 / 62 / 31 全绿
 ```

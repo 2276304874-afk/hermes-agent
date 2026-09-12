@@ -58,8 +58,10 @@ process.on('exit', (code) => {
  *   lib/knowledge.js    本地知识库检索与列举
  *   lib/skills.js       技能扫描 + 语义索引
  *   lib/maintenance.js  日志截断 / 上传清扫
+ *   lib/checkpoints.js  hermes 影子 git 检查点的 Node 侧读写（列表/差异/预案/回退）
  *   lib/router.js       极简路由表（保持前缀匹配语义）
- *   lib/routes/*.js     各领域路由（kb / session / system / provider / media / chat / toolbox）
+ *   lib/routes/*.js     各领域路由（kb / session / system / provider / media / chat / toolbox /
+ *                       workspace / checkpoints）
  *
  * 实时进度来源（双通道）：
  *   1. token 流（L3 真流式）：oneshot.py 打了补丁 —— 当 HERMES_STREAM_FILE 存在时，
@@ -108,6 +110,7 @@ const MediaRoutes = require('./lib/routes/media');
 const ChatRoutes = require('./lib/routes/chat');
 const ToolboxRoutes = require('./lib/routes/toolbox');
 const WorkspaceRoutes = require('./lib/routes/workspace');
+const CheckpointRoutes = require('./lib/routes/checkpoints');
 
 /* ---------- 启动自检 ----------
  * 顺序固定：流式补丁（已在 require './lib/hermes' 时自愈）→ 日志截断 → 上传清扫 + 24h 周期。
@@ -136,6 +139,7 @@ KbRoutes.registerAuthed(apiRouter);   // P2-10：KB 数据接口（/api/kb/* 与
 ChatRoutes.register(apiRouter);
 ToolboxRoutes.register(apiRouter);
 WorkspaceRoutes.register(apiRouter);   // dsh 式工作区：列表/新建/删除/会话归属
+CheckpointRoutes.register(apiRouter);  // 文件系统检查点：列表/预案/差异/快照/回退
 
 const server = http.createServer(async (req, res) => {
   /* ---------- 请求/响应流错误隔离（P0-2） ----------

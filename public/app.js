@@ -1466,6 +1466,9 @@
       updateHint(); loadSessions();
     }
     else if (ev === 'notice') { addNote('☁️ ' + obj.message, 'cloud'); }
+    /* 停止条件裁判（服务端强制层）：agent 原地打转/卡死时，用户必须马上看得见 ——
+     * 提示词层只能"请求"模型别打转，这层是外部观测，不依赖模型自觉。 */
+    else if (ev === 'judge') { addNote('⚖️ ' + obj.message, obj.level === 'hard' ? 'err' : 'warn'); }
     else if (ev === 'token') {
       // 真流式：逐 token 追加到当前 run 的回答区（节流渲染）
       if (!currentRunEl) currentRunEl = createRunPanel();
@@ -1969,6 +1972,216 @@
   $('sessSearch').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(loadSessions, 180); });
   inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } });
   inputEl.addEventListener('input', () => { inputEl.style.height = 'auto'; inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + 'px'; });
+
+  /* ---------- 检查点回退（hermes 影子 git 快照） ----------
+   * 助手每次改文件前会自动留一张快照，本面板负责「看清再回」：
+   *   列表 → 选中某张 → 预览（会覆盖哪些文件 / 会保留哪些手改）→ 才允许回退。
+   * 三层安全网（缺一不可，都对应真实事故）：
+   *   ① 默认安全模式：只覆盖"台账认定助手写过、且你之后没手改"的文件；
+   *   ② 全量模式必须勾选复选框 + 二次确认（会连你的手改一起覆盖）；
+   *   ③ 服务端回退前自动拍「回退前快照」——所以回退这一步本身也是可逆的。
+   * ⚠️ 不在这里做任何路径拼接信任：dir/hash/file 全部由服务端二次校验（只认已登记项目）。 */
+  const cpMask = $('cpMask'), cpProject = $('cpProject'), cpList = $('cpList');
+  const cpHint = $('cpHint'), cpPreview = $('cpPreview'), cpNote = $('cpNote');
+  const cpState = { dir: '', checkpoints: [], selected: null };
+
+  function cpBytes(n) {
+    if (!n) return '0 B';
+    const u = ['B', 'KB', 'MB', 'GB'];
+    let i = 0, v = n;
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (i === 0 ? v : v.toFixed(1)) + ' ' + u[i];
+  }
+  function cpTime(iso) {
+    const d = new Date(iso);
+    if (isNaN(d)) return iso;
+    const p = (x) => String(x).padStart(2, '0');
+    return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  function cpSay(text, cls) {
+    cpNote.hidden = !text;
+    cpNote.className = 'cp-note' + (cls ? ' ' + cls : '');
+    cpNote.textContent = text || '';
+  }
+  function cpShowPreview(show) { cpPreview.hidden = !show; }
+
+  async function cpLoad() {
+    cpSay('');
+    cpShowPreview(false);
+    cpHint.textContent = '加载中…';
+    let d;
+    try { d = await (await apiFetch('/api/checkpoints')).json(); }
+    catch (e) { cpHint.textContent = '读取失败：' + ((e && e.message) || e); return; }
+
+    if (!d.enabled) {
+      cpProject.innerHTML = '';
+      cpHint.textContent = '';
+      cpList.innerHTML = '<div class="cp-empty">检查点未启用。<br>需在 <code>~/.hermes/config.yaml</code> 里把 <code>checkpoints.enabled</code> 设为 <code>true</code>（hermes v2 起官方默认关闭）。</div>';
+      return;
+    }
+    const sizeInfo = `占用 ${cpBytes(d.sizeBytes)} · 每项目上限 ${d.maxSnapshots} 张 · 单文件上限 ${d.maxFileMb}MB`;
+    if (!d.projects.length) {
+      cpProject.innerHTML = '';
+      cpHint.textContent = sizeInfo;
+      cpList.innerHTML = '<div class="cp-empty">还没有检查点。<br>助手<b>每次改文件之前</b>会自动拍一张（每项目每回合最多一张）。<br>也可以点上方「📸 拍快照」手动留一个还原点。</div>';
+      return;
+    }
+
+    // 项目下拉：保留当前选择，否则默认本工作区（没有则第一个）
+    const prev = cpState.dir;
+    cpProject.innerHTML = '';
+    for (const p of d.projects) {
+      const o = document.createElement('option');
+      o.value = p.workdir;
+      o.textContent = `${p.name}${p.exists ? '' : '（目录已不存在）'} · ${p.commits} 张`;
+      cpProject.appendChild(o);
+    }
+    const pick = d.projects.some((p) => p.workdir === prev) ? prev
+      : (d.projects.some((p) => p.workdir === d.workspace) ? d.workspace : d.projects[0].workdir);
+    cpProject.value = pick;
+    cpHint.textContent = sizeInfo;
+    await cpSelect(pick);
+  }
+
+  async function cpSelect(dir) {
+    cpState.dir = dir;
+    cpState.selected = null;
+    cpShowPreview(false);
+    cpSay('');
+    let d;
+    try { d = await (await apiFetch('/api/checkpoints/list?dir=' + encodeURIComponent(dir))).json(); }
+    catch (e) { cpList.innerHTML = '<div class="cp-empty">列表读取失败：' + ((e && e.message) || e) + '</div>'; return; }
+    cpState.checkpoints = d.checkpoints || [];
+    if (!cpState.checkpoints.length) {
+      cpList.innerHTML = '<div class="cp-empty">这个项目还没有检查点。<br>助手下次改文件前会自动拍一张。</div>';
+      return;
+    }
+    cpList.innerHTML = '';
+    cpState.checkpoints.forEach((c, i) => {
+      const row = document.createElement('div');
+      row.className = 'cp-row';
+      row.dataset.i = String(i);
+      const stat = c.filesChanged ? `${c.filesChanged} 文件 +${c.insertions}/-${c.deletions}` : '基线快照';
+      row.innerHTML = `<div class="cp-main"><span class="cp-hash">${escapeHtml(c.shortHash)}</span>`
+        + `<span class="cp-reason" title="${escapeHtml(c.reason)}">${escapeHtml(c.reason)}</span>`
+        + `<span class="cp-time">${cpTime(c.ts)}</span><span class="cp-stat">${stat}</span></div>`
+        + '<div class="cp-ops"><button type="button" data-act="plan">预览</button>'
+        + '<button type="button" data-act="apply" class="danger">回退…</button></div>';
+      cpList.appendChild(row);
+    });
+  }
+
+  async function cpPlan(i) {
+    const c = cpState.checkpoints[i];
+    if (!c) return;
+    cpState.selected = c;
+    for (const r of cpList.querySelectorAll('.cp-row')) r.classList.toggle('active', r.dataset.i === String(i));
+    cpShowPreview(true);
+    cpPreview.innerHTML = '<div class="cp-hint">正在计算影响范围…</div>';
+    const q = `dir=${encodeURIComponent(cpState.dir)}&hash=${encodeURIComponent(c.hash)}`;
+    let plan = null, df = null;
+    try {
+      plan = await (await apiFetch('/api/checkpoints/plan?' + q)).json();
+      df = await (await apiFetch('/api/checkpoints/diff?' + q + '&stat=1')).json();
+    } catch (e) { cpPreview.innerHTML = '<div class="cp-hint">预览失败：' + escapeHtml((e && e.message) || String(e)) + '</div>'; return; }
+
+    if (!plan || plan.ok === false) {
+      cpPreview.innerHTML = '<div class="cp-hint">无法预览：' + escapeHtml((plan && plan.error) || '未知错误') + '</div>';
+      return;
+    }
+    const list = (arr) => arr.length
+      ? '<ul>' + arr.map((f) => `<li data-file="${escapeHtml(f)}" title="点击只回退这一个文件">${escapeHtml(f)}</li>`).join('') + '</ul>'
+      : '<ul class="none"><li>（无）</li></ul>';
+    const note = plan.ledgerEmpty
+      ? '<div class="cp-hint">该项目没有助手写入台账（可能是纯终端改动或历史遗留），回退将按<b>整目录</b>进行。</div>'
+      : '';
+    cpPreview.innerHTML = note
+      + '<div class="cp-cols">'
+      + `<div class="cp-col"><h4>会被回退（${plan.restore.length}）</h4>${list(plan.restore)}</div>`
+      + `<div class="cp-col"><h4>会保留（${plan.skipped.length}）</h4>${list(plan.skipped)}</div>`
+      + '</div>'
+      + `<div class="cp-diffstat">${escapeHtml((df && df.stat) || '无差异统计')}</div>`
+      + '<div class="cp-apply"><label><input type="checkbox" id="cpAllChk"> 连手动改动一起覆盖（全量回退）</label>'
+      + '<button type="button" class="primary" id="cpGoBtn">回退到此检查点</button></div>';
+    $('cpGoBtn').onclick = () => cpRestore(c);
+    for (const li of cpPreview.querySelectorAll('.cp-col li[data-file]')) {
+      li.onclick = () => cpRestoreOne(c, li.dataset.file);
+    }
+  }
+
+  async function cpPost(body) {
+    const r = await apiFetch('/api/checkpoints/restore', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    return r.json();
+  }
+  function cpReport(d, okLead) {
+    if (!d || d.ok === false) { cpSay((d && d.error) || '回退失败', 'err'); return; }
+    const lines = [okLead];
+    if (d.deleted && d.deleted.length) lines.push('已删除（该文件在目标检查点中不存在）：' + d.deleted.join('、'));
+    if (d.restoredFiles && d.restoredFiles.length) lines.push('已还原 ' + d.restoredFiles.length + ' 个文件：' + d.restoredFiles.slice(0, 8).join('、') + (d.restoredFiles.length > 8 ? ' …' : ''));
+    if (d.skippedUserEdits && d.skippedUserEdits.length) lines.push('已保留你的手动改动 ' + d.skippedUserEdits.length + ' 个：' + d.skippedUserEdits.slice(0, 8).join('、') + (d.skippedUserEdits.length > 8 ? ' …' : ''));
+    if (d.skippedOversize && d.skippedOversize.length) lines.push('因超出单文件上限未处理：' + d.skippedOversize.join('、'));
+    if (d.failedDeletes && d.failedDeletes.length) lines.push('删除失败：' + d.failedDeletes.join('、'));
+    lines.push('（回退前已自动留一张「回退前快照」，反悔可再回退到它）');
+    cpSay(lines.join('\n'), 'ok');
+  }
+
+  async function cpRestore(c) {
+    const chk = cpPreview.querySelector('#cpAllChk');
+    const all = !!(chk && chk.checked);
+    if (all) {
+      const ok = window.confirm('全量回退会覆盖你在这个项目里的所有手动改动。\n\n回退前会自动留一张「回退前快照」，可以再回去。\n\n确定继续？');
+      if (!ok) return;
+    }
+    cpSay('正在回退…');
+    try {
+      const d = await cpPost({ dir: cpState.dir, hash: c.hash, all, confirm: all });
+      cpReport(d, all
+        ? `已全量回退到 ${c.shortHash}（${c.reason}）。`
+        : `已安全回退到 ${c.shortHash}（${c.reason}），你的手动改动已保留。`);
+      await cpSelect(cpState.dir);
+      await cpPlan(0);
+    } catch (e) { cpSay('回退请求失败：' + ((e && e.message) || e), 'err'); }
+  }
+
+  async function cpRestoreOne(c, file) {
+    if (!file) return;
+    if (!window.confirm(`只回退这一个文件：\n\n${file}\n\n确定？`)) return;
+    cpSay('正在回退单个文件…');
+    try {
+      const d = await cpPost({ dir: cpState.dir, hash: c.hash, file });
+      cpReport(d, `已回退文件 ${file}。`);
+    } catch (e) { cpSay('回退请求失败：' + ((e && e.message) || e), 'err'); }
+  }
+
+  $('cpBtn').onclick = () => { cpMask.classList.add('show'); cpLoad(); };
+  $('cpClose').onclick = () => cpMask.classList.remove('show');
+  cpMask.addEventListener('click', (e) => { if (e.target === cpMask) cpMask.classList.remove('show'); });
+  cpProject.onchange = () => cpSelect(cpProject.value);
+  cpList.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-act]');
+    if (!btn) return;
+    const i = Number(btn.closest('.cp-row').dataset.i);
+    if (btn.dataset.act === 'plan') cpPlan(i);
+    // 行内「回退…」不直接落地：先展开影响范围（会覆盖/会保留），由用户在预览里点确认 —— 
+    // 一次点击就覆盖别人的项目文件太廉价了。
+    else if (btn.dataset.act === 'apply') cpPlan(i).then(() => { const g = $('cpGoBtn'); if (g) g.scrollIntoView({ block: 'nearest' }); });
+  });
+  $('cpSnap').onclick = async () => {
+    cpSay('正在拍快照…');
+    try {
+      const r = await apiFetch('/api/checkpoints/snapshot', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dir: cpState.dir || cpProject.value || '', reason: 'UI 手动快照' }),
+      });
+      const d = await r.json();
+      if (d.ok === false) cpSay(d.error || '拍快照失败', 'err');
+      else if (d.skipped) cpSay('未新建快照：' + d.skipped, '');
+      else cpSay('已拍快照 ' + String(d.hash).slice(0, 8) + '。', 'ok');
+      await cpLoad();
+    } catch (e) { cpSay('拍快照请求失败：' + ((e && e.message) || e), 'err'); }
+  };
 
   updateHint();
   // 有 token 直接加载，否则弹登录
