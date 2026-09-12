@@ -22,7 +22,7 @@
 | 序 | 步骤 | 优先级 | 成本 | 前置依赖 / 风险等级 |
 |---|---|---|---|---|
 | A1 ✅ | 停止裁判"乐观停止"复测 | 高 | 低 | 无（纯验证） |
-| A2 | 配置真源落盘 `setup.sh`（幂等补写） | 高 | 中 | ⛔ 需用户在 Terminal.app 跑一次 `setup.sh` 验证（launchd 边界） |
+| A2 ✅ | 配置真源落盘 `setup.sh`（幂等补写） | 高 | 中 | ⛔ 脚本已写+语法/幂等验证通过；待用户在 Terminal.app 跑一次 `bash setup.sh` 实测（launchd 边界） |
 | B1 | P1-4 `curator adopt` 技能治理 | 中 | 中 | 先读 curator 源码确认副作用范围 |
 | B2 | P1-2 结构化任务清单（可选） | 中（收益已降） | 中 | 无；小模型易漂需固定模板 |
 | C1 | P2-2 工作目录前导 | 中 | 低 | 与项目上传后缀统一措辞 |
@@ -40,13 +40,12 @@
 - **预期产出**：`test/stopjudge.test.js` 新增 2–3 个"反例对话"用例（模拟同一工具调用重复 / 同结果重复，断言触发 D1 warn 或 D2 hard）；`docs/checkpoints.md` 补一句结论"已用固定反例集复测通过"。
 - **风险 / 前置依赖**：纯验证、无破坏性。若复测暴露漏报，回到 `lib/stopjudge.js` 调阈值（可能升 hard 或降 `dupLimit`）——但判据设计原则是**高精度低召回**，调参需谨慎，避免误报让提示失去信任。
 
-### A2 · 配置真源落盘 `setup.sh`（幂等补写）★ 风险闭环
-- **功能 / 解决的问题**：`checkpoints.*` 与 `terminal.cwd` 写在 `~/.hermes/config.yaml`（仓库外，且同文件含 gateway key），**换机重装不会自动复现**——目前已靠 `npm run health` §10 三条断言防漂移，但"重装即复现"尚未实现。
-- **预期产出**：`setup.sh` 增加一段"若 config.yaml 缺 `checkpoints` / `terminal.cwd` 则幂等补写（不覆盖已有值）"；可加自检回显。补写后 `healthcheck` §10 即从"报警"变为"自愈"。
+### A2 · 配置真源落盘 `setup.sh`（幂等补写）★ 风险闭环 ✅ 已实现
+- **功能 / 解决的问题**：`checkpoints.*` 与 `terminal.cwd` 写在 `~/.hermes/config.yaml`（仓库外，且同文件含 gateway key），**换机重装不会自动复现**——此前靠 `npm run health` §10 三条断言防漂移，但"重装即复现"未实现。现已在 `setup.sh` 加 `[2c]` 段幂等补写。
+- **预期产出**：`setup.sh` `[2c]` 段——若 `config.yaml` 缺 `^checkpoints:` / `^terminal:` 则先 `cp` 备份再追加（不覆盖已有值），含自检回显。补写后 `healthcheck` §10 即从"报警"变为"自愈"。语法 `bash -n` 通过；幂等性已用空配置模拟验证（首次补写、二次跳过，各块仅 1 次）。
 - **风险 / 前置依赖**：
-  - ⛔ **launchd 权限边界**：我的 shell 里跑 `setup.sh` 必 EIO 5，需**你在 Terminal.app 手动跑一次 `bash setup.sh`** 才能完整验证（注册后 `launchctl kickstart` 我可用）。
-  - 改动同含 gateway key 的文件，务必 `cp config.yaml config.yaml.bak` 后用 diff 校验"只增不减"，避免破坏现有认证。
-  - 建议：我先把 `setup.sh` 改好并自检 diff，你跑一次确认即可。
+  - ⛔ **launchd 权限边界**：我的 shell 里跑 `setup.sh` 必 EIO 5，需**你在 Terminal.app 手动跑一次 `bash setup.sh`** 才能完整验证（注册后 `launchctl kickstart` 我可用）。本机 config 已含两项 → 实跑会是"跳过"分支，不改动现有认证。
+  - 改动同含 gateway key 的文件，脚本已内置 `cp config.yaml config.yaml.bak-<时间戳>` 备份，增量只增不减。
 
 ### B1 · P1-4 `curator adopt` 技能治理
 - **功能 / 解决的问题**：192 个技能目录待治理（去重 / 标注 `agent-created` / 清理孤儿 `~/.hermes/.skill_embeddings.json` 853KB）。

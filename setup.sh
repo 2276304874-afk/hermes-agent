@@ -105,6 +105,48 @@ for i in $(seq 1 20); do
   sleep 1
 done
 
+# ---------- 2c. 确保引擎配置真源（换机重装即复现） ----------
+# checkpoints / terminal.cwd 写在仓库外的 ~/.hermes/config.yaml（同文件含 gateway key），
+# 换机重装不会自动复现 —— 这里幂等补写（缺才写、不覆盖已有值），让 healthcheck §10 从「报警」变「自愈」。
+echo; echo "==> [2c] 确保引擎配置真源 (checkpoints / terminal.cwd)"
+CFG="$HOME_DIR/.hermes/config.yaml"
+if [ -f "$CFG" ]; then
+  NEED_CP=0; NEED_TERM=0
+  grep -q '^checkpoints:' "$CFG" || NEED_CP=1
+  grep -q '^terminal:'    "$CFG" || NEED_TERM=1
+  if [ "$NEED_CP" = 1 ] || [ "$NEED_TERM" = 1 ]; then
+    # 先备份，避免破坏含 gateway.key 的现有配置（增量 diff 友好）
+    cp "$CFG" "$CFG.bak-$(date +%Y%m%d%H%M%S)"
+    if [ "$NEED_CP" = 1 ]; then
+      {
+        echo ""
+        echo "# [setup.sh 自动补写] 文件系统检查点：写文件/破坏性命令前自动快照，可 /rollback"
+        echo "checkpoints:"
+        echo "  enabled: true"
+        echo "  max_snapshots: 20"
+        echo "  max_total_size_mb: 300"
+        echo "  max_file_size_mb: 10"
+        echo "  auto_prune: true"
+        echo "  retention_days: 7"
+        echo "  min_interval_hours: 24"
+      } >> "$CFG"
+    fi
+    if [ "$NEED_TERM" = 1 ]; then
+      {
+        echo ""
+        echo "# [setup.sh 自动补写] 终端/文件工具工作目录（绝对路径，防 gateway 模式退到 \$HOME）"
+        echo "terminal:"
+        echo "  cwd: $WS"
+      } >> "$CFG"
+    fi
+    echo "  ✓ 已补写缺失块（checkpoints=$NEED_CP terminal=$NEED_TERM），备份: $CFG.bak-*"
+  else
+    echo "  ✓ checkpoints / terminal 均已存在，跳过（幂等）"
+  fi
+else
+  echo "  ⚠ 未找到 $CFG —— 引擎尚未生成配置，跳过（先跑一次 hermes 初始化）"
+fi
+
 # ---------- 3. 健康检查 ----------
 echo; echo "==> [4/6] 健康检查"
 TOKEN=""
