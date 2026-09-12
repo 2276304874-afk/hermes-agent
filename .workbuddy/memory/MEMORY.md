@@ -100,3 +100,5 @@
 - **config 里的 `cron:` 表不执行** —— 它由 hermes **常驻主进程**调度，而我们常驻的是 gateway（非 serve，安全红线）→ cron 表从不运行。凡依赖 hermes cron 的机制一律视为不生效（`daily_backup` 零产物即此因）。
 - ⚠️ 顺序铁律：**先 commit 再 backup** —— bundle 只含已提交内容，未提交改动不进备份。
 - 待用户确认（红区）：`npm run mirror` 推异地（github.com:443 阻，走 api.github.com REST）。
+- **首字延迟有两个截然不同的态，别混为一谈**：冷态 ≈75s = 输入 token ÷ prefill 速率（gemma4 271 tok/s × ~20K 输入 ≈ 74s）—— **这是物理成本不是故障**，排查时勿误判；热态 ≈24s（prompt cache 部分命中）。唯一杠杆是 cache 命中率（关闭 micro_compact 后实测 75.6s → 23.7s，3.2×）。
+- ⚠️ 测 TTFT 要抓第一个 `token` 事件时间；顶层会**早发一个占位 msg**（约 240ms），拿它当首字会得出错误结论。
