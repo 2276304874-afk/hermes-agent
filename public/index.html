@@ -83,6 +83,7 @@
             <input type="file" id="fileInput" style="display:none" />
             <button class="mic-btn" id="micBtn" title="语音输入"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2.8" width="6" height="11.5" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0"/><line x1="12" y1="18" x2="12" y2="21.2"/></svg></button>
             <button id="wsModBtn" class="ws-mod" type="button" title="允许本轮及后续指令执行终端等高危工具（安全 hook 仍拦截明显破坏性命令；gateway 放行有效期见提示）"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5 4.5 6.4v5.1c0 4.4 3.2 7.7 7.5 9 4.3-1.3 7.5-4.6 7.5-9V6.4z"/><path d="m9 12 2.2 2.2L15.5 10"/></svg>工作区内修改</button>
+            <button id="autoBtn" class="ws-mod" type="button" title="自主执行模式：注入三色权限约束与检查点纪律，自动携带黄区放行（TTL 到期自动回收）；命中红区时 agent 会停下输出「⛔ 需要授权」，结束后给出交付摘要"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4.5 13.5H11L9.5 22 19.5 9.5H13.5z"/></svg>自主执行</button>
             <div class="spacer"></div>
             <!-- 这两个按钮只控制**思考内容在界面上的显示/隐藏**，不影响模型行为：
                  本地模型的思维链属于同一次推理，开关它既不省时间也不省 token。

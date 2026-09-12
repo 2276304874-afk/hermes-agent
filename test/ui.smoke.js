@@ -407,6 +407,27 @@ const CONSOLE_WHITELIST = [
       check(html && html.nextId === 'modelSelect', '按钮位置：在 modelSelect 之前', html?.nextId);
     }
 
+    /* ---------- L10 自主执行开关 ---------- */
+    const autoBtn = await page.$('#autoBtn');
+    check(autoBtn !== null, '自主执行按钮存在', String(!!autoBtn));
+    if (autoBtn) {
+      const title = await autoBtn.getAttribute('title') || '';
+      check(title.includes('自主执行'), '按钮 title 含"自主执行"', title.slice(0, 60));
+      // 点击 → on；再点 → off（纯前端状态，不发请求）
+      await page.evaluate(() => document.getElementById('autoBtn').click());
+      let on = await page.evaluate(() => document.getElementById('autoBtn').classList.contains('on'));
+      check(on === true, '点击后进入 on 态', String(on));
+      await page.evaluate(() => document.getElementById('autoBtn').click());
+      on = await page.evaluate(() => document.getElementById('autoBtn').classList.contains('on'));
+      check(on === false, '再点后退出 on 态', String(on));
+      // 位置：紧跟在工作区内修改开关之后
+      const pos = await page.evaluate(() => {
+        const btn = document.getElementById('autoBtn');
+        return btn?.previousElementSibling?.id || null;
+      });
+      check(pos === 'wsModBtn', '按钮位置：在 wsModBtn 之后', pos);
+    }
+
     /* ---------- 截图存档 ---------- */
     try {
       await page.screenshot({ path: SHOT, fullPage: false });

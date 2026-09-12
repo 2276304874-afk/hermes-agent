@@ -29,6 +29,11 @@
   /* dsh 式工作区（2026-09-12）：activeWs='' 表示「全部/未选」；wsModOn = 输入卡内「工作区内修改」开关（= allowDangerous） */
   let wsList = [], wsAssign = {}, activeWs = '';
   let wsModOn = false;
+  /* 自主执行模式（2026-09-12）：autoOn = 输入卡内「自主执行」开关。
+     打开后：① 请求带 autonomous=true → 服务端把三色权限/检查点/摘要格式前导注入 prompt；
+     ② 自动携带 allowDangerous=true（黄区 5 分钟 TTL 放行，用户点开关即视为明确授权）；
+     ③ 红区仍由 safety hook 硬拦，agent 命中后按前导约定停下输出「⛔ 需要授权」。 */
+  let autoOn = false;
 
   /* ---------- P1-5 静默 catch 治理 ----------
    * 规范：catch 里"什么都不做"会让故障看起来像"功能本来就没有"——模型下拉空了、
@@ -1676,7 +1681,8 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: finalPrompt, sessionId, model: modelSelect.value,
-          allowDangerous: !!allowDangerous || wsModOn,          // 卡内「工作区内修改」开关与审批重跑共用一条放行链路
+          allowDangerous: !!allowDangerous || wsModOn || autoOn,  // 卡内开关与审批重跑共用一条放行链路；自主模式自动携带黄区放行
+          autonomous: autoOn,                                    // 自主执行：服务端注入三色权限/检查点/摘要前导（lib/autonomy.js）
           workspace: (!sessionId && activeWs) ? activeWs : '',  // 仅新会话首轮传工作区，服务端 assignIfNew 只在无归属时写入
         })
       });
@@ -1764,6 +1770,16 @@
     addNote(wsModOn
       ? '⚠️ 工作区内修改已开启：agent 可执行终端等高危工具（到期自动恢复拦截）'
       : '工作区内修改已关闭', wsModOn ? 'cloud' : '');
+    updateHint();
+  };
+  // 「自主执行」开关：Codex 式自主工作模式的卡内入口（约束注入在服务端 lib/autonomy.js）
+  const autoBtnEl = $('autoBtn');
+  if (autoBtnEl) autoBtnEl.onclick = () => {
+    autoOn = !autoOn;
+    autoBtnEl.classList.toggle('on', autoOn);
+    addNote(autoOn
+      ? '⚡ 自主执行已开启：agent 将按三色权限纪律连续工作（红区操作仍会停下请求授权），结束后输出交付摘要'
+      : '自主执行已关闭', autoOn ? 'cloud' : '');
     updateHint();
   };
   // 提示词优化按钮：调用本地模型改写输入框文本，结果可确认/可回退
