@@ -173,6 +173,90 @@ fi
 HERMES_BIN="$HOME/.hermes/venvs/hermes/bin/hermes"
 if [ -x "${HERMES_BIN}" ]; then ok "Hermes CLI 在位"; else bad "Hermes CLI 缺失: ${HERMES_BIN}"; fi
 
+# ---------- 8. 备份产物 ----------
+# 为什么单独查「产物」而不是查配置：2026-09-12 审计发现「配置已写、机制未跑」是本项目
+# 的系统性模式 —— cron 声称每天备份 state.db 却零产物、checkpoints 0 B、curator 0 技能、
+# skills.preload 查无解析。配置文件里的字面承诺全部不可信，只有磁盘上的产物算数。
+echo
+echo "[8] 备份产物"
+# 与 backup.sh 的默认输出目录保持一致（仓库的上级目录，而非仓库内）。
+BK_DIR="${HERMES_BACKUP_DIR:-$(cd "${WS}/.." && pwd)/_hermes-backups}"
+LATEST_BUNDLE="$(ls -t "${BK_DIR}"/*.bundle 2>/dev/null | head -1 || true)"
+if [ -n "${LATEST_BUNDLE}" ]; then
+  ok "仓库 bundle 存在: $(basename "${LATEST_BUNDLE}") ($(du -h "${LATEST_BUNDLE}" | cut -f1))"
+  # 新鲜度：备份超过 7 天等于没有备份（只会给人虚假的安全感）
+  if [ -n "$(find "${LATEST_BUNDLE}" -mtime -7 2>/dev/null)" ]; then
+    ok "bundle 在 7 天内 ($(date -r "${LATEST_BUNDLE}" '+%Y-%m-%d %H:%M'))"
+  else
+    bad "bundle 已超 7 天未更新 —— 跑: npm run backup:all（一键双轨）"
+  fi
+else
+  bad "无仓库 bundle —— 跑: npm run backup:all（一键双轨）"
+fi
+# 引擎侧（~/.hermes）：config/state.db/auth/cron —— 磁盘一挂无法从 git 恢复。
+# ⚠️ 实测坑：`hermes backup --quick` 的产物落在 ~/.hermes/state-snapshots/<ts>/，
+#    而**不是** -o 指定的路径（-o 对 --quick 无效，会被静默忽略）。断言必须查真实落点。
+SNAP_DIR="$HOME/.hermes/state-snapshots"
+LATEST_SNAP="$(ls -td "${SNAP_DIR}"/*/ 2>/dev/null | head -1 || true)"
+if [ -n "${LATEST_SNAP}" ]; then
+  ok "引擎侧快照存在: $(basename "${LATEST_SNAP}") ($(du -sh "${LATEST_SNAP}" 2>/dev/null | cut -f1))"
+  if [ -n "$(find "${LATEST_SNAP}" -maxdepth 0 -mtime -7 2>/dev/null)" ]; then
+    ok "引擎侧快照在 7 天内 ($(date -r "${LATEST_SNAP}" '+%Y-%m-%d %H:%M'))"
+  else
+    bad "引擎侧快照超 7 天未更新 —— 跑: npm run backup:all（一键双轨）"
+  fi
+else
+  bad "无引擎侧快照 —— 跑: npm run backup:all（一键双轨）"
+fi
+# cron daily_backup 的落点。实测从未产出：该 cron 由 hermes 常驻进程调度，而我们的常驻入口是
+# gateway（非 serve），不跑 cron 表。state-snapshots 已覆盖 state.db，故这里只提示不算失败。
+if [ -z "$(ls -A "$HOME/.hermes/backups" 2>/dev/null)" ]; then
+  warn "~/.hermes/backups 为空：config 的 cron daily_backup 从未产出（快照已覆盖其用途，可删该 cron）"
+fi
+
+# ---------- 9. 引擎配置不变量 ----------
+# 这三条都是「曾经踩过、修好后怕被静默改回去」的坑，各对应一次真实故障。
+# 放在 health 里的意义：hermes 升级或手工调整后，一条命令就能发现回退。
+echo
+echo "[9] 引擎配置不变量"
+CFG="$HOME/.hermes/config.yaml"
+if [ -f "${CFG}" ]; then
+  # 9.1 上下文窗口取值必须处处一致。
+  # 故障史：Modelfile 已把模型改为 32K，但 config 四处仍是 16384 → 引擎按旧窗口算预算
+  # （tools/budget_config.py，turn_budget = 窗口 30%），工具结果阈值被腰斩，扩窗白做。
+  CTX_VALS="$(grep -oE '(context_length|context_window|num_ctx):[[:space:]]*[0-9]+' "${CFG}" 2>/dev/null \
+              | grep -oE '[0-9]+$' | sort -u | tr '\n' ' ' | sed 's/ *$//')"
+  if [ "${CTX_VALS}" = "32768" ]; then
+    ok "上下文窗口处处一致 = 32768"
+  else
+    bad "上下文窗口不一致或非 32768（实测取值: ${CTX_VALS:-无}）—— 四处 must 同改，见 MEMORY.md"
+  fi
+  # 9.2 micro_compact 必须关闭（官方默认 False）。
+  # 故障史：曾开 true + every_n_turns:1 = 每回合打断一次 prompt-cache 前缀，
+  # 实测首字延迟 100% 命中 6.5s / 97% 命中 34.7s（差 5 倍）。
+  if grep -qE '^[[:space:]]*micro_compact:[[:space:]]*(false|False|off)' "${CFG}" 2>/dev/null; then
+    ok "micro_compact 已关闭（保住 prompt-cache 前缀）"
+  else
+    bad "micro_compact 处于开启态 —— 每回合打断 cache 前缀，首字延迟会退化 5 倍"
+  fi
+else
+  bad "找不到 ${CFG}"
+fi
+# 9.3 元技能改名未被 hermes 升级复原。
+# 故障史：技能索引里出现 "- hermes-agent:" 会让 system_prompt.py:608 注入
+# 「先 skill_view 加载元技能」的激进引导，小模型把任务里的工具名误判触发，
+# 加载 15KB 技能文后把「技能已加载」当成交付（5/5 稳定复现）。
+META_SKILL="$HOME/.hermes/skills/autonomous-ai-agents/hermes-agent/SKILL.md"
+if [ -f "${META_SKILL}" ]; then
+  if grep -qE '^name:[[:space:]]*hermes-agent-docs' "${META_SKILL}" 2>/dev/null; then
+    ok "元技能已改名 (hermes-agent-docs)，不触发激进引导"
+  else
+    bad "元技能名被复原为 hermes-agent —— 元技能脱轨会复发，见 MEMORY.md"
+  fi
+else
+  warn "找不到元技能 SKILL.md，跳过（是否换过 skills 目录？）"
+fi
+
 # ---------- 汇总 ----------
 echo
 echo "=============================================="

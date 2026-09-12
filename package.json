@@ -13,6 +13,7 @@
     "ui": "node test/ui.smoke.js 4173 \"$(cat $HOME/.hermes/ui_token 2>/dev/null)\"",
     "health": "bash healthcheck.sh",
     "backup": "bash backup.sh",
+    "backup:all": "bash scripts/backup-all.sh",
     "mirror": "node scripts/push-via-api.js main",
     "mirror:dry": "node scripts/push-via-api.js main --dry-run",
     "check": "for f in server.js lib/*.js lib/routes/*.js public/app.js scripts/*.js test/*.js; do node --check \"$f\" || exit 1; done"
