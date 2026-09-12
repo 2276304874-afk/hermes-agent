@@ -231,6 +231,19 @@
     const note = document.createElement('div'); note.className = 'sysnote' + (cls ? ' ' + cls : '');
     note.textContent = text; messagesEl.appendChild(note); scrollDown(); return note;
   }
+  /* 开关反馈 toast：瞬时状态提示浮在输入卡上方（不进对话流）。
+     复用同一 #uiToast 元素——频繁连点只刷新文案并重置计时，不会堆叠。 */
+  let toastTimer = null;
+  function toast(text, cls) {
+    let t = document.getElementById('uiToast');
+    if (!t) { t = document.createElement('div'); t.id = 'uiToast'; $('composer').appendChild(t); }
+    t.textContent = text;
+    t.className = 'toast' + (cls ? ' ' + cls : '');
+    void t.offsetWidth;                       // 重启过渡动画
+    t.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { t.classList.remove('show'); }, 2600);
+  }
   /* ---------- /kb 知识库召回命令 ---------- */
   function addKbCards(query, hits, errMsg) {
     const msg = document.createElement('div'); msg.className = 'msg bot';
@@ -294,10 +307,15 @@
     run.innerHTML = '<div class="traj">'
       + TRAJ_STEPS.map((s, i) => '<div class="traj-step' + (i === 0 ? ' running' : '') + '" data-step="' + s[0] + '">'
         + '<i class="traj-ic"></i><span class="traj-lb">' + s[1] + '</span><b class="traj-t">—</b></div>').join('')
-      + '</div><span class="thinking">思考中<span class="dots"></span></span><div class="tool-timeline"></div><div class="answer"></div>';
+      + '</div><span class="thinking">思考中<span class="dots"></span></span>'
+      + '<div class="tools-wrap"><div class="tools-toggle" hidden><span class="arr">▶</span><span>🛠️ 工具调用</span><b class="tt-count">0</b><span class="tt-live">执行中<span class="dots"></span></span></div><div class="tool-timeline"></div></div><div class="answer"></div>';
     msg.innerHTML = '<div class="avatar">H</div><div class="bubble"></div>';
     msg.querySelector('.bubble').appendChild(run);
     messagesEl.appendChild(msg); scrollDown();
+
+    // 工具轨迹默认收起：汇总行点击展开/折叠明细（参考 WorkBuddy「查看所有产物」式交互）
+    const tog = run.querySelector('.tools-toggle');
+    tog.onclick = () => run.querySelector('.tools-wrap').classList.toggle('open');
 
     run._trajT0 = Date.now();
     // 100ms 刷新：肉眼足够连贯，又不至于频繁重排
@@ -357,7 +375,7 @@
       r.className = 'reason' + (chatMode === 'think' ? ' open' : '');
       r.innerHTML = '<div class="reason-head"><span class="arr">▶</span><span>深度思考</span></div><div class="reason-body"></div>';
       r.querySelector('.reason-head').onclick = () => r.classList.toggle('open');
-      run.insertBefore(r, run.querySelector('.tool-timeline'));
+      run.insertBefore(r, run.querySelector('.tools-wrap') || run.querySelector('.tool-timeline'));
       scrollDown();
     }
     const body = r.querySelector('.reason-body');
@@ -417,6 +435,16 @@
   }
 
   // 工具卡片：宣布时以 pending 占位（含命令），结果到达后回填同一张卡
+  // 汇总行同步：卡片数、执行中指示；0 张时隐藏整行
+  function updateToolToggle(run) {
+    const wrap = run && run.querySelector('.tools-wrap');
+    if (!wrap) return;
+    const cards = wrap.querySelectorAll('.tool-card');
+    const tog = wrap.querySelector('.tools-toggle');
+    tog.hidden = cards.length === 0;
+    tog.querySelector('.tt-count').textContent = cards.length;
+    wrap.classList.toggle('running', !!wrap.querySelector('.tool-card.pending'));
+  }
   function appendToolCard(run, info) {
     const tl = run.querySelector('.tool-timeline');
     const card = document.createElement('div');
@@ -430,7 +458,7 @@
       ? '<span class="run-dot">执行中</span>'
       : escapeHtml(String(info.out == null ? '' : info.out).slice(0, 3000))) + '</pre>';
     card.innerHTML = html;
-    tl.appendChild(card); scrollDown();
+    tl.appendChild(card); updateToolToggle(run); scrollDown();
   }
   // assistant 宣布调用工具（toolCalls 是 JSON 字符串）→ 渲染 pending 卡片
   function renderToolIntents(run, toolCallsJson) {
@@ -474,6 +502,7 @@
       blockedCommand = m ? m[1] : String(out).slice(0, 120);
       showApproval();
     }
+    updateToolToggle(run);
     scrollDown();
   }
   /* ---------- 危险操作审批 ---------- */
@@ -679,6 +708,7 @@
       trajFinish(r);
       const tr = r.querySelector('.traj'); if (tr) tr.remove();
       for (const card of r.querySelectorAll('.tool-card.pending')) card.remove();
+      updateToolToggle(r);
       appendBotActs(r);
     }
     scrollDown();
@@ -1533,9 +1563,22 @@
   //  - 其余（二进制/大文本）→ POST /api/upload 落盘 ~/.hermes/uploads/，注入路径让 Hermes 自己读
   const INLINE_TEXT_EXTS = ['txt','md','markdown','json','csv','tsv','log','js','ts','jsx','tsx','py','rb','go','rs','java','c','cpp','h','hpp','cs','sh','bash','zsh','yaml','yml','toml','ini','cfg','conf','xml','html','css','sql','r','properties','swift','kt','php','lua','diff','patch'];
   const INLINE_MAX_CHARS = 6000;
-  const fileBtn = $('fileBtn'), fileInput = $('fileInput'), filePreviewEl = $('filePreview');
+  const fileInput = $('fileInput'), filePreviewEl = $('filePreview');
   let pendingFile = null;   // { kind:'inline', name, text } | { kind:'path', name, path }
-  fileBtn.onclick = () => fileInput.click();
+  // 上传统一入口：一个按钮弹出菜单选「文件 / 文件夹」（两个隐藏 input 保持各自选择器语义）
+  const uploadBtn = $('uploadBtn'), uploadMenu = $('uploadMenu');
+  if (uploadBtn && uploadMenu) {
+    uploadBtn.onclick = (e) => { e.stopPropagation(); uploadMenu.hidden = !uploadMenu.hidden; };
+    uploadMenu.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-up]');
+      if (!b) return;
+      uploadMenu.hidden = true;
+      (b.dataset.up === 'proj' ? $('projInput') : fileInput).click();
+    });
+    document.addEventListener('click', (e) => {
+      if (!uploadMenu.hidden && !uploadMenu.contains(e.target)) uploadMenu.hidden = true;
+    });
+  }
   fileInput.addEventListener('change', () => {
     const f = fileInput.files && fileInput.files[0];
     fileInput.value = '';
@@ -1586,6 +1629,7 @@
     filePreviewEl.classList.add('show');
     const note = pendingFile.kind === 'inline' ? ' · 内容将随消息一起发送'
       : pendingFile.kind === 'path' ? ' · 已存盘，发送时把路径交给 Hermes 读取'
+      : pendingFile.kind === 'projdir' ? ' · 项目已落盘，发送时把仓库地图流程交给 Hermes'
       : ' · 正在上传…';
     filePreviewEl.innerHTML = '<span class="tag">📄 ' + escapeHtml(pendingFile.name) + note
       + '<button type="button" class="rm" title="移除文件" style="position:static;display:inline-block;margin-left:8px;vertical-align:middle">✕</button></span>';
@@ -1595,7 +1639,66 @@
     if (pf.kind === 'inline') {
       return '\n\n[用户上传了文件 ' + pf.name + '，以下是完整内容]\n<<<<FILE\n' + pf.text + '\nFILE>>>>';
     }
+    if (pf.kind === 'projdir') {
+      return '\n\n[用户上传了一个完整项目「' + pf.name + '」（' + pf.count + ' 个文件），已保存到本地路径：' + pf.path
+        + '。执行纪律：① 先跑一次仓库地图：node /Users/zhaocaozheng/WorkBuddy/赫尔墨斯特工/scripts/repomap.js ' + pf.path
+        + '；② 拿到地图后**立即**用 5-8 句话向用户总结——项目类型、技术栈、目录结构、核心模块、入口文件——这是本轮必须交付的内容；'
+        + '③ 不要加载任何技能，不要做全目录通读或无范围搜索；后续精读哪个文件由用户指令决定。]';
+    }
     return '\n\n[用户上传了文件，已保存到本地路径：' + pf.path + '。请先用文件读取工具查看该文件内容，再回答。]';
+  }
+
+  /* ---------- 项目（整目录）上传：参考 Codex 的仓库交接 ----------
+   * 浏览器 webkitdirectory 选择文件夹 → 过滤依赖/产物/隐藏目录与超大文件 →
+   * 单次 POST /api/upload { project, files:[{path,data}] } → 服务端按相对路径落盘。 */
+  const projInput = $('projInput');
+  const PROJ_SKIP = /^(node_modules|\.git|dist|build|out|coverage|__pycache__|\.venv|venv|\.idea|\.vscode|\.next)$/;
+  const PROJ_MAX_FILE = 2 * 1024 * 1024, PROJ_MAX_TOTAL = 16 * 1024 * 1024, PROJ_MAX_COUNT = 200;
+  if (projInput) {
+    projInput.addEventListener('change', async () => {
+      const picked = Array.from(projInput.files || []);
+      projInput.value = '';
+      if (!picked.length) return;
+      // 项目名 = 相对路径第一段；过滤跳过目录与超限文件
+      const files = [];
+      let total = 0, skipped = 0;
+      let rootName = '';
+      for (const f of picked) {
+        const rel = f.webkitRelativePath || f.name;
+        const parts = rel.split('/');
+        if (!rootName) rootName = parts[0];
+        const inner = parts.slice(1).join('/') || f.name;
+        if (parts.some(p => PROJ_SKIP.test(p) || (p.startsWith('.') && p !== '.github'))) { skipped++; continue; }
+        if (f.size > PROJ_MAX_FILE) { skipped++; continue; }
+        total += f.size;
+        if (total > PROJ_MAX_TOTAL || files.length >= PROJ_MAX_COUNT) { skipped++; continue; }
+        files.push({ path: inner, file: f });
+      }
+      if (!files.length) { alert('没有可上传的文件（依赖目录/超大文件已自动跳过）'); return; }
+      pendingFile = { kind: 'uploading', name: '📁 ' + rootName + '（' + files.length + ' 个文件）' };
+      renderFilePreview();
+      try {
+        const payload = [];
+        for (const it of files) {
+          const buf = await it.file.arrayBuffer();
+          let bin = '';
+          const bytes = new Uint8Array(buf);
+          for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+          payload.push({ path: it.path, data: btoa(bin) });
+        }
+        const r = await apiFetch('/api/upload', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ project: rootName, files: payload })
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.error || 'upload failed');
+        pendingFile = { kind: 'projdir', name: rootName, path: d.dir, count: d.count };
+      } catch (e) {
+        pendingFile = null;
+        alert('项目上传失败: ' + (e.message || e));
+      }
+      renderFilePreview();
+    });
   }
 
   // 豆包式"为你推荐"：回答结束后用当前模型后台生成 3 条追问磁贴，点击即发送。
@@ -1758,6 +1861,35 @@
 
   function newChat() { mountComposer(false); sessionId = null; currentRunId = null; currentRunEl = null; messagesEl.innerHTML = ''; renderEmptyState(); setConvTitle('新会话', false); updateHint(); loadSessions(); }
 
+  // 压缩续聊：旧会话 → 本地模型摘要 → 预建新 gateway 会话；摘要随新会话首条消息自动注入（lib/context.js）
+  const compactBtnEl = $('compactBtn');
+  if (compactBtnEl) compactBtnEl.onclick = async () => {
+    if (!sessionId || busy) return;
+    const orig = compactBtnEl.innerHTML;
+    compactBtnEl.disabled = true;
+    compactBtnEl.textContent = '⏳ 压缩中…';
+    try {
+      const r = await apiFetch('/api/session/compact', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId, model: modelSelect.value })
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || '压缩失败');
+      sessionId = d.newSessionId; currentRunId = null; currentRunEl = null;
+      mountComposer(false);
+      messagesEl.innerHTML = '';
+      setConvTitle('压缩续聊', true); setConvMeta(wsAssign[sessionId] || '');
+      const note = document.createElement('div'); note.className = 'sysnote';
+      note.textContent = '✅ 已压缩上一会话（摘要：' + (d.summary || '').slice(0, 80) + '…）。继续下达新任务即可。';
+      messagesEl.appendChild(note);
+      updateHint(); loadSessions();
+    } catch (e) {
+      toast('⚠️ 压缩失败: ' + (e.message || e), '');
+    }
+    compactBtnEl.innerHTML = orig;
+    compactBtnEl.disabled = false;
+  };
+
   sendBtn.onclick = () => send();
   $('newChat').onclick = newChat;
   // 工作台改版：侧栏顶部新会话按钮与头部「新对话」同逻辑
@@ -1767,7 +1899,7 @@
   if (wsModBtnEl) wsModBtnEl.onclick = () => {
     wsModOn = !wsModOn;
     wsModBtnEl.classList.toggle('on', wsModOn);
-    addNote(wsModOn
+    toast(wsModOn
       ? '⚠️ 工作区内修改已开启：agent 可执行终端等高危工具（到期自动恢复拦截）'
       : '工作区内修改已关闭', wsModOn ? 'cloud' : '');
     updateHint();
@@ -1777,7 +1909,7 @@
   if (autoBtnEl) autoBtnEl.onclick = () => {
     autoOn = !autoOn;
     autoBtnEl.classList.toggle('on', autoOn);
-    addNote(autoOn
+    toast(autoOn
       ? '⚡ 自主执行已开启：agent 将按三色权限纪律连续工作（红区操作仍会停下请求授权），结束后输出交付摘要'
       : '自主执行已关闭', autoOn ? 'cloud' : '');
     updateHint();
