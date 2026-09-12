@@ -24,6 +24,27 @@
  *
  * 退出码：0 成功 / 1 失败（失败时不会留下半成品 ref —— ref 是最后一步才建的）
  *
+ * ── 怎么判断「远端镜像是不是最新的」────────────────────────────────────────
+ *
+ * ⚠️ 不要用 `git status` / `git branch -vv` / `git log origin/main..main` 判断。
+ *    提交 sha 两边必然不同（见下方坑 ②），本地也没有 origin/main 这个 tracking ref
+ *    （`git fetch` 需要 github.com:443，本机被阻断）。这几条命令只会给出
+ *    "无 upstream" 或 "diverged" 这类**结构性噪声**，不反映真实同步状态。
+ *
+ * ✅ 权威判据是**根树 sha**：内容寻址，与提交时间戳无关。相等 ⇒ 文件内容逐字节一致。
+ *
+ *     LOCAL_TREE=$(git rev-parse main^{tree})
+ *     REMOTE_TREE=$(gh api repos/<owner>/<repo>/git/commits/$( \
+ *       gh api repos/<owner>/<repo>/git/ref/heads/main --jq .object.sha) --jq .tree.sha)
+ *     [ "$LOCAL_TREE" = "$REMOTE_TREE" ] && echo "镜像最新" || echo "镜像落后，跑 npm run mirror"
+ *
+ *     [脚本自身跑完也会打印这两行 + 逐提交比对，正常应看到 "57/57 一致" 与
+ *      "远端可达提交: 57 / 本地 57 ✅ 完整历史"。]
+ *
+ * ⚠️ 本脚本每次都是**整体重推**（~700 次 API 调用、约 8 分钟，实测 723 次），
+ *    没有增量。因为提交 sha 不对齐，增量同步在 Git Data API 上无从谈起。
+ *    另注：前台一次性跑超过 ~120s 会被执行环境 SIGKILL，请在后台跑并读日志文件。
+ *
  * ── 两条踩过的硬坑（都已在代码里修掉，勿回退）──────────────────────────────
  *
  * ① 必须用 `git ls-tree -r -z`，不能去掉 `-z`。
@@ -46,12 +67,19 @@
  * ========================================================================== */
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
 const path = require('path');
 
 const REPO_DIR = path.resolve(__dirname, '..');
 const BRANCH = (process.argv[2] && !process.argv[2].startsWith('--')) ? process.argv[2] : 'main';
 const DRY = process.argv.includes('--dry-run');
-const OUT = (s) => process.stdout.write(s + '\n');
+
+/* ⚠️ 必须走 fs.writeSync 而不是 process.stdout.write。
+ * 实测：输出被管道（如 `| tail`）或被上级脚本重定向时，stdout 是**块缓冲**，
+ * 一次调用里最后几十行会攒着不落盘 —— 于是进程一旦在中途死掉，
+ * 日志看起来"跑到 40/317 就没了"，把「静默死亡」伪装成「卡住」，
+ * 排查方向直接跑偏。writeSync 走同步系统调用，每行立即落盘。 */
+const OUT = (s) => fs.writeSync(1, s + '\n');
 
 // ---------- 工具 ----------
 function git(args, opts = {}) {
@@ -81,7 +109,21 @@ const { owner, repo } = getRemote();
 const API = `https://api.github.com/repos/${owner}/${repo}`;
 
 let callCount = 0;
-async function api(method, url, body, { retries = 3 } = {}) {
+
+/* 单请求超时与重试次数。
+ * 原来写死 120s / 3 次：一个卡住的请求最坏要拖 120×3+4.5 ≈ 6 分钟，
+ * 而整趟推送有 ~500 个请求 —— 偶发卡顿会让总时长不可预测。
+ * 实测本机 api.github.com 正常往返 0.6s、最慢 2.7s（30 次序列探针），
+ * 故 30s 足够宽松；配合 5 次重试，单点卡顿的恢复时间从 6 分钟降到 ~2 分钟。 */
+const intEnv = (name, dflt) => {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : dflt;
+};
+const REQ_TIMEOUT_MS = intEnv('HERMES_MIRROR_TIMEOUT_MS', 30000);
+const MAX_ATTEMPTS = intEnv('HERMES_MIRROR_ATTEMPTS', 5);
+
+async function api(method, url, body, { retries = MAX_ATTEMPTS } = {}) {
+  const label = url.startsWith(API) ? url.slice(API.length) : url;
   for (let attempt = 1; attempt <= retries; attempt++) {
     callCount++;
     let res;
@@ -96,9 +138,12 @@ async function api(method, url, body, { retries = 3 } = {}) {
           'Content-Type': 'application/json',
         },
         body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(120000),
+        signal: AbortSignal.timeout(REQ_TIMEOUT_MS),
       });
     } catch (e) {
+      // ⚠️ 重试必须留痕。静默重试会让「很慢」与「已经挂了」在日志上长得一模一样，
+      // 而这两者的处置完全不同（前者等，后者查）。故每次失败都打一行。
+      OUT(`      ⚠ ${method} ${label} 第 ${attempt}/${retries} 次异常：${e.name} ${e.message}`);
       if (attempt === retries) throw new Error(`${method} ${url} 网络失败: ${e.message}`);
       await new Promise(r => setTimeout(r, 1500 * attempt));
       continue;
