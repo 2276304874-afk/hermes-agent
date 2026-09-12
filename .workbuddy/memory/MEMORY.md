@@ -70,3 +70,33 @@
 
 ## 备份与镜像
 `npm run backup`(本地 bundle,`git clone <bundle>` 还原);`npm run mirror`(GitHub `2276304874-afk/hermes-agent`,经 REST API 非 git push——本机 github.com:443 被阻断)。非 ASCII 路径用 `git ls-tree -r -z`。
+
+## agent 能力三件套（2026-09-12）
+- selfcheck.js（网页自检：截图+console 错误，ok:true 才交付）/ repomap.js（仓库地图：目录+符号索引）/ code-review 技能（🔴🟡🟢结构化报告）——三个技能都在 ~/.hermes/skills/，脚本在项目 scripts/。
+- 压缩续聊：/api/session/compact → lib/context.js pendingSummary 一次性注入；UI 入口在会话顶栏 #compactBtn。
+- 项目上传：/api/upload 项目模式（防穿越、2MB/文件、16MB/项目）；前端 #projBtn webkitdirectory；后缀提示 hermes 跑 repomap。
+
+## 上下文预算红线（2026-09-12 血泪）★★★
+- 生产模型 hermes-local-gemma4 已重建为 **num_ctx 32768**（原 16384 被静态 prompt 吃满 → 工具结果一到用户任务就被逐出窗口 → 模型失忆写 hello-world/factorial 原型 demo，跨模型确定性复现）。加新工具/扩 system prompt 前必算预算：system 27K 字符+tools schema 37K+技能索引 14K ≈ 17K tok 起步，32K 只是够用，长会话仍需压缩续聊。
+- hermes 的 HERMES_AGENT_HELP_GUIDANCE 会在技能索引含 "- hermes-agent:" 时注入「先 skill_view 加载元技能」指引——小模型会误触发。已改技能 frontmatter name 为 hermes-agent-docs 规避；hermes 升级后需检查是否复原（skills/autonomous-ai-agents/hermes-agent/SKILL.md，备份 .bak-hermes-meta）。
+- launchd 服务的 PATH 不含 /opt/homebrew/bin：两个 plist 已显式注入 PATH，装新 CLI 工具（rg 等）后 agent 即可用。
+
+## 原生能力审计清单（2026-09-12 实测，hermes 升级后需复查）★
+- 给方案前先查原生子命令，勿重造轮子：hermes checkpoints（影子 git + /rollback，实测 0 B 休眠）/ curator（技能治理，需 adopt 才管我们的技能）/ backup（引擎侧 zip，不含项目源码）/ journey / usage / insights。
+- 项目侧备份 = bash backup.sh（本地 bundle，同盘不防磁盘故障）；异地 = npm run mirror（REST API 推 GitHub；本机 github.com:443 阻、api.github.com 通）。main 无 upstream，从未同步过。
+
+## 上下文预算的第二处坑（2026-09-12 晚实测）★★
+- 改 Ollama 模型的 num_ctx 只解决一半：hermes 侧上下文窗口键若不同步，引擎仍按旧窗口算预算（tools/budget_config.py: budget_for_context_window，turn_budget = 窗口 30%，floor 16K 字符）。**实际是六处**（见文末「阶段一」章节）——原写「四处」有漏。改完必须用引擎解析路径复核，不能只看 config。
+- `compression.micro_compact` 官方默认 False，源码注释明确「每回合重写历史、每回合破坏 prompt-cache 前缀」。我们的 prompt cache 命中率直接决定首字延迟（100%→6.5s / 97%→34.7s），故该键应保持关闭或 every_n_turns≥5。改这个键前先看 hermes_cli/config_defaults.py 的注释。
+- 工程纪律新增：**配置写完必须验证产物存在**（文件/目录大小/行数）。checkpoints 0 B、curator agent-created=0、~/.hermes/backups 空目录、skills.preload 疑似无解析 —— 全是「写了配置没验产物」。
+
+## 阶段一落地：配置真源 / 备份落点 / 断言（2026-09-12 21:35）★★★
+- **上下文窗口真源 = 六处**（不是四处）：`model.context_length` + `model.extra_body.num_ctx` + `providers.<p>.context_length` + `providers.<p>.extra_body.num_ctx` + `model_overrides.<p>.<model>.context_window`（每个模型一条）。已全部对齐 32768。
+- **验证必须打到引擎解析路径**，不能读配置：`get_model_context_length()`（gateway/run.py:2260 的解析口径）→ 返回 32768；`budget_for_context_window()` → 单条工具结果阈值 9,830→**19,660** 字符、单回合预算 19,660→**39,321**（各 2.0×）。healthcheck [9] 已加一致性断言防回退。
+- **备份两轨的真实落点**（极易查错，审计就栽在这）：
+  · 项目 bundle → **仓库的上级目录** `WorkBuddy/_hermes-backups/`，**不在仓库内**！在仓库根 `ls *.bundle` 会误判为「从未备份」。
+  · 引擎侧 → `~/.hermes/state-snapshots/<ts>/`（含 state.db/config/auth/cron）。⚠️ `hermes backup --quick` **静默忽略 `-o` 参数**（无报错、无产物）。
+  · 一键 `npm run backup:all`（scripts/backup-all.sh）：两轨 + 快照轮转（hermes 自身**不轮转**，会无限堆积，脚本默认留 5 份）。
+- **config 里的 `cron:` 表不执行** —— 它由 hermes **常驻主进程**调度，而我们常驻的是 gateway（非 serve，安全红线）→ cron 表从不运行。凡依赖 hermes cron 的机制一律视为不生效（`daily_backup` 零产物即此因）。
+- ⚠️ 顺序铁律：**先 commit 再 backup** —— bundle 只含已提交内容，未提交改动不进备份。
+- 待用户确认（红区）：`npm run mirror` 推异地（github.com:443 阻，走 api.github.com REST）。
