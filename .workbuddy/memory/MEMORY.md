@@ -42,7 +42,8 @@
 - ②会话车道:两 backend 入口加409「会话忙」;前端必须补`resp.ok`检查(否则409被当流读→永久自旋)。
 - ③KB混合检索:`recallHits` FTS5+向量(bge-m3,复用skills.js)文本去重取高分;阈值0.50(相关≈0.65/无关≈0.20)。
 - ③性能坑(已修):`embedTexts`把整批塞进**一个**HTTP请求(超时120s),KB~1200块→指纹一变就全量重嵌=单请求阻塞数十秒;而`recallContext`在**每个新会话**都跑→"KB一变下次新会话首token被拖住"(实测症状:路由冒烟`/api/kb/search`+`/api/kb`双双15s超时52/2)。修法=`lib/knowledge.js`向量按**块内容哈希**缓存(KB_EMBED_FILE v2格式`{v:2,key,byHash}`),只嵌新块;含v1→v2自动迁移+并发去重+保存时按当前块剪枝。新增`test/kb-embed-incremental.test.js`。
-- ④记忆沉淀:`state.db`持久化→**数据本不丢**,缺的只是时效(最坏30min)。新增`lib/kbflush.js`在compact/restore边界拉`kb/sync.sh --capture-only`(纯规则不调模型,免抢16G内存);sync.sh加原子mkdir单实例锁。
+- ④记忆沉淀:`state.db`持久化→**数据本不丢**,缺的只是时效(最坏30min)。新增`lib/kbflush.js`在compact/restore边界拉`kb/sync.sh --capture-only`(纯规则不调模型,免抢16G内存);sync.sh加原子mkdir单实例锁。⚠️含中文bash`${VAR}`勿接全角(锁竞争日志行曾因此unbound)。
+- ⑤渠道契约:`lib/channel.js`=契约+注册表+参考适配器,**未接任何live路径**。安全决策编码进`assertAdapter`注册期校验:拒①非出站拉取(webhook)②`mayGrantDangerous:true`③缺任一必需闸门(allowlist/firstPairing/dangerousNotRelaxed/sessionLaneGuard/attachmentIsolation)。详见`docs/CHANNEL-STRATEGY.md`。
 - ⑥stall降级:`lib/stall.js`纯函数(`stallConfig`/`failoverPlan`)+`handleChatGateway`重试循环。**默认关**:`HERMES_STALL_SEC`未设=不生效;`HERMES_FALLBACK_MODEL`备用模型。两硬边界=仅首token前降 + 备用模型必须已驻留(16G降冷模型代价更大)。文档`docs/gateway.md`§4.6。
 - ⑥接线踩坑:轮询循环只启一次(getSessionId活闭包);换会话`stats.lastMsgId`归零;重跑标题带attempts后缀(gateway标题唯一);**必须`active.delete(旧sessionId)`**(否则永久409);每次尝试独立AbortController;stall掐流也走onDone须区分(否则轮询立刻finalize)。
 
