@@ -22,7 +22,52 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>赫尔墨斯特工 - Hermes</title>
-<link rel="stylesheet" href="/app.css" />
+<link rel="stylesheet" href="/app.css?v=__ASSET_VER__" />
+<script>
+  // FOUC 自愈守卫：若刷新恰好撞上 app.css 被写一半（AI 改前端 / 磁盘竞态），
+  // 浏览器会拿到 200 但内容截断的样式表，整页退化成裸 HTML；且 Chromium 的
+  // 内存缓存可能在同标签页软刷新时复用这份坏 CSS（无视 no-store 的已知行为）。
+  // 检测「样式表未生效」→ 自动带 cache-buster 硬重载一次；sessionStorage 防循环。
+  (function () {
+    function cssBroken() {
+      try {
+        var sheet = null;
+        for (var i = 0; i < document.styleSheets.length; i++) {
+          if ((document.styleSheets[i].href || '').indexOf('app.css') !== -1) { sheet = document.styleSheets[i]; break; }
+        }
+        if (!sheet) return true;
+        // 哨兵判据（主）：app.css 文件末尾有一条 .app-css-complete 规则，
+        // 文件任何位置被截断它都会消失。body 背景规则在文件头部，靠它判不全。
+        var rules = 0, sentinel = false;
+        try { rules = sheet.cssRules.length; } catch (e) { return false; /* 跨域/安全异常：当作正常 */ }
+        if (rules === 0) return true;
+        for (var j = 0; j < rules; j++) {
+          var t = sheet.cssRules[j].selectorText || '';
+          if (t.indexOf('app-css-complete') !== -1) { sentinel = true; break; }
+        }
+        if (!sentinel) return true;
+        // 辅助判据：主题变量应给 body 一个非透明底色；裸 HTML 时是 transparent
+        return getComputedStyle(document.body).backgroundColor === 'rgba(0, 0, 0, 0)';
+      } catch (e) { return false; }
+    }
+    // 重试页钩子：守卫重载后本标记仍在——给样式表 URL 追加一次性 nonce，
+    // 绕开内存缓存里被污染的同键条目（同 URL 的软刷新永远拿不到新内容）。
+    try {
+      if (sessionStorage.getItem('hermes_css_retry')) {
+        var spLink = document.querySelector('link[rel="stylesheet"]');
+        if (spLink) spLink.href = spLink.href.split('&r=')[0].split('?r=')[0] + (spLink.href.indexOf('?') === -1 ? '?' : '&') + 'r=' + Date.now();
+      }
+    } catch (e) { /* 无害 */ }
+    document.addEventListener('DOMContentLoaded', function () {
+      try {
+        if (!cssBroken()) { sessionStorage.removeItem('hermes_css_retry'); return; }
+        if (sessionStorage.getItem('hermes_css_retry')) return;   // 已重试过仍坏 → 不死循环，交给人工排查
+        sessionStorage.setItem('hermes_css_retry', '1');
+        location.replace(location.pathname + '?css_retry=' + Date.now() + location.hash);
+      } catch (e) { /* 隐私模式等异常：保持现状 */ }
+    });
+  })();
+</script>
 <script>
   // B8: 主题初始化放 head，避免加载时闪烁（默认暗色，可被 localStorage 覆盖）
   (function () {
@@ -38,8 +83,44 @@
   // 注意：取全目录而非本文件，否则改了 app.js 页面不会提示刷新。
   window.__UI_VERSION__ = '__UI_VERSION__';
 </script>
+<style>
+  /* ---------- 启动屏（内联样式，刻意不依赖 app.css）----------
+   * 作用：① 品牌化加载体验；② 彻底盖住"CSS 被写坏/未加载"时的裸 HTML 闪烁。
+   * 因为样式内联在 HTML 里，app.css 就算截断它也照常显示。app.js 就绪后移除，
+   * 底部另有 5s 兜底：app.js 本身加载失败也不会把用户锁在启动屏。 */
+  #splash { position: fixed; inset: 0; z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: #101014; transition: opacity .28s ease; }
+  #splash.hide { opacity: 0; pointer-events: none; }
+  #splash .sp-mark { width: 76px; height: 76px; border-radius: 21px; display: flex; align-items: center; justify-content: center; color: #fff; background: linear-gradient(135deg, #5f8bff, #8b7cf7); box-shadow: 0 12px 32px rgba(95,139,255,.38); }
+  #splash .sp-mark svg { width: 36px; height: 36px; }
+  #splash .sp-name { color: #eceef2; font-size: 22px; font-weight: 700; letter-spacing: .5px; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #splash .sp-status { color: #a2a8b3; font-size: 13px; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; }
+  #splash .sp-spin { width: 22px; height: 22px; border-radius: 50%; border: 2.5px solid rgba(255,255,255,.14); border-top-color: #5f8bff; animation: sp-rot .8s linear infinite; }
+  @keyframes sp-rot { to { transform: rotate(360deg); } }
+  html[data-theme="light"] #splash { background: #f7f6f3; }
+  html[data-theme="light"] #splash .sp-name { color: #1d1f26; }
+  html[data-theme="light"] #splash .sp-spin { border-color: rgba(0,0,0,.12); border-top-color: #5f8bff; }
+</style>
 </head>
 <body>
+  <!-- 启动屏：必须位于 body 首元素，app.js 就绪后由 hideSplash() 淡出移除 -->
+  <div id="splash" role="status" aria-label="正在启动">
+    <div class="sp-mark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13.5 20.5 4l-6 16.5-3-6.5z"/><path d="m11.5 14 9-10"/></svg></div>
+    <div class="sp-name">赫尔墨斯特工</div>
+    <div class="sp-status">正在启动本地智能体…</div>
+    <div class="sp-spin"></div>
+  </div>
+  <script>
+    // 记录启动屏出现时刻（app.js 的 hideSplash 据此保证最短展示 700ms）；
+    // 5s 兜底：app.js 加载失败/被截断时也能离开启动屏（正常路径由 app.js 提前移除）
+    (function () {
+      var sp = document.getElementById('splash');
+      if (sp) sp.dataset.shownAt = String(Date.now());
+      setTimeout(function () {
+        var el = document.getElementById('splash');
+        if (el) el.remove();
+      }, 5000);
+    })();
+  </script>
   <button id="verBanner" type="button" onclick="location.reload()">🔄 界面有新版本，点击刷新</button>
   <header>
     <button id="toggleSide" class="icon-only" title="历史会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9.5" y1="4" x2="9.5" y2="20"/></svg></button>
@@ -57,6 +138,11 @@
   <div class="layout">
     <aside id="sidebar">
       <button id="newChatSide" class="side-new" title="开启新会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="12" y1="8.5" x2="12" y2="15.5"/><line x1="8.5" y1="12" x2="15.5" y2="12"/></svg>新会话</button>
+      <!-- 对话/工作 分段开关：决定新会话走哪个模型与历史列表归属（对话=轻量直连秒回，工作=完整引擎） -->
+      <div class="mode-seg" id="modeSeg" role="tablist" title="对话=轻量闲聊模型（秒回）；工作=完整智能体（工具/文件/知识库）">
+        <button type="button" class="mode-opt" data-mode="chat">对话</button>
+        <button type="button" class="mode-opt" data-mode="work">工作</button>
+      </div>
       <div class="ws-bar" id="wsBar" title="工作区：过滤会话；新会话将归入所选工作区"></div>
       <h3>历史会话</h3>
       <input id="sessSearch" class="sess-search" type="text" placeholder="🔍 搜索会话…" autocomplete="off" />
@@ -107,7 +193,7 @@
           </div>
         </div>
         <div class="img-preview" id="imgPreview"></div>
-        <div class="img-preview" id="filePreview"></div>
+        <div class="file-preview" id="filePreview"></div>
         <div class="hint" id="hint"></div>
       </div>
     </main>
@@ -193,6 +279,6 @@
   </div>
 </div>
 
-<script src="/app.js"></script>
+<script src="/app.js?v=__ASSET_VER__"></script>
 </body>
 </html>

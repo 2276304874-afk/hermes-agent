@@ -1,0 +1,6 @@
+# 对话模式专用模型（侧栏 对话/工作 分段开关的「对话」侧）
+# qwen3:8b + 8k 上下文：闲聊场景 prefill 小、与工作模型 hermes-local-gemma4 双驻留
+# （约 3.2G + 3.4G，16G 机器无压力），模式切换免换载。调用端已显式 think:false。
+FROM qwen3:8b
+PARAMETER num_ctx 8192
+PARAMETER temperature 0.7

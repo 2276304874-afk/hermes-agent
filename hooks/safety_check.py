@@ -127,9 +127,16 @@ DANGEROUS_PATTERNS = [
 cmd_lower = command.lower()
 for pattern, reason in DANGEROUS_PATTERNS:
     if re.search(pattern, cmd_lower):
+        # C2 拦截反馈可读化（2026-09-13）：原消息只给原因+命令，模型容易原地重试/
+        # 变换写法再撞墙。补一段模型可读的行动指引（勿绕过 / 说明必要性等批准 / 给替代方案）。
         sys.stdout.write(json.dumps({
             "action": "block",
-            "message": f"安全拦截（{reason}）: {command[:120]}"
+            "message": (
+                f"安全拦截（{reason}）：{command[:120]}\n"
+                "该命令触发了安全策略。请勿重试或变换写法绕过；"
+                "向用户说明执行此操作的必要性与风险，等待用户在界面批准放行后重试，"
+                "或改用安全的替代方案完成任务。"
+            )
         }))
         sys.exit(0)
 

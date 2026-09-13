@@ -108,6 +108,7 @@ const SystemRoutes = require('./lib/routes/system');
 const ProviderRoutes = require('./lib/routes/provider');
 const MediaRoutes = require('./lib/routes/media');
 const ChatRoutes = require('./lib/routes/chat');
+const ChatModeRoutes = require('./lib/routes/chatmode');
 const ToolboxRoutes = require('./lib/routes/toolbox');
 const WorkspaceRoutes = require('./lib/routes/workspace');
 const CheckpointRoutes = require('./lib/routes/checkpoints');
@@ -137,6 +138,7 @@ ProviderRoutes.register(apiRouter);
 MediaRoutes.register(apiRouter);
 KbRoutes.registerAuthed(apiRouter);   // P2-10：KB 数据接口（/api/kb/* 与 /api/kb?q=）一律在认证闸门之后
 ChatRoutes.register(apiRouter);
+ChatModeRoutes.register(apiRouter);    // 对话模式：独立会话存储 + 直连 Ollama（侧栏 对话/工作 分段开关）
 ToolboxRoutes.register(apiRouter);
 WorkspaceRoutes.register(apiRouter);   // dsh 式工作区：列表/新建/删除/会话归属
 CheckpointRoutes.register(apiRouter);  // 文件系统检查点：列表/预案/差异/快照/回退
@@ -169,7 +171,16 @@ const server = http.createServer(async (req, res) => {
      * 时才回 500；已经开写就只把流失掉，不再试图纠正状态。 */
     console.error(`[handler] ${req.method} ${req.url} 抛错：${e && e.message}`);
     if (e && e.stack) console.error(e.stack);
-    if (!res.headersSent && !res.writableEnded) {
+    if (e && e.statusCode === 413 && !res.headersSent && !res.writableEnded) {
+      /* 请求体超限（readBody 抛出，readBody 已 pause 停止读取）：优雅回 413，
+       * 响应 flush 完毕后再断 socket（客户端还在上传，直接 destroy 会 RST 丢响应）。 */
+      sendJSON(res, 413, { error: 'body too large' });
+      res.on('finish', () => { try { req.destroy(); } catch { /* 已断开 */ } });
+    } else if (e instanceof SyntaxError && !res.headersSent && !res.writableEnded) {
+      /* 畸形 JSON 请求体（28 处 JSON.parse(await readBody(req) || '{}') 抛 SyntaxError）。
+       * 这是客户端错误，应回 400 而非被打成通用 500 —— 既准确也便于前端据此提示。 */
+      sendJSON(res, 400, { error: 'invalid JSON body' });
+    } else if (!res.headersSent && !res.writableEnded) {
       sendJSON(res, 500, { error: e.message });
     } else {
       try { res.end(); } catch { /* 响应已结束，忽略 */ }
@@ -198,6 +209,15 @@ server.listen(PORT, HOST, () => {
   console.log(`路由登记：公开 ${publicRouter.list().length} 条 / 认证 ${apiRouter.list().length} 条`);
   // P0-2: 运行时心跳（基线在此打点，之后每 30 分钟一行；HERMES_HB_MS 可覆盖）
   startHeartbeat(active);
+  // B6（审计 2026-09-13 根因修复）：服务启动即预加载网关主模型，消除「服务刚起 / 长时间空闲后」
+  // 的首个聊天冷加载。16G 下同机其他模型换载争抢会触发 swap 静默挂起（审计实测 200s 无 token）。
+  // finalizeRun 已每轮续期 2h（KEEP_ALIVE），此处补齐"启动空窗"。非阻塞、失败静默、不阻塞监听。
+  try {
+    const { prewarmOllama } = require('./lib/ollama');
+    const { DEFAULT_MODEL } = require('./lib/config');
+    prewarmOllama(DEFAULT_MODEL);
+    console.log(`预加载主模型：${DEFAULT_MODEL}（首轮聊天免冷加载等待）`);
+  } catch (e) { console.log(`预加载主模型：跳过 ${e && e.message}`); }
   // 网关后端诊断（选项 B）：服务起来即明确 gateway 是否在、key 是否配置、fail_closed 是否开，
   // 避免"静默回退 -z"掩盖配置错误（R11 / T2）。
   (async () => {

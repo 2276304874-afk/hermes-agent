@@ -35,7 +35,26 @@
 - `npm run mirror`=GitHub `2276304874-afk/hermes-agent`(private,REST API,因github.com:443阻)。每次整体重推~8min/~750调用,判据只看根树sha(提交sha两边必不同,因UTC归一)。别频繁推。
 
 ## 测试七张网(全绿才commit)
-- test173/smoke53/ui62/health31/safety6/stop9/chat6。`npm run check`退出0。本地`node --test test/*.test.js`。`npm run ui`依赖`$HOME/.hermes/ui_token`,手敲漏传假报401。
+- test195/smoke54/ui66/health33/safety6/stop9/chat6。`npm run check`退出0。本地`node --test test/*.test.js`。`npm run ui`依赖`$HOME/.hermes/ui_token`,手敲漏传假报401。
+
+## OpenClaw 借鉴清单落地(2026-09-13)
+- ①技能 eligibility:实测前提不成立(194技能0平台门控/过滤仅省~17token)。真缺口=UI`scanLocalSkills()`未镜像引擎门控+**只扫一层**(漏64%嵌套技能),已递归+门控对齐。
+- ②会话车道:两 backend 入口加409「会话忙」;前端必须补`resp.ok`检查(否则409被当流读→永久自旋)。
+- ③KB混合检索:`recallHits` FTS5+向量(bge-m3,复用skills.js)文本去重取高分;阈值0.50(相关≈0.65/无关≈0.20)。
+- ③性能坑(已修):`embedTexts`把整批塞进**一个**HTTP请求(超时120s),KB~1200块→指纹一变就全量重嵌=单请求阻塞数十秒;而`recallContext`在**每个新会话**都跑→"KB一变下次新会话首token被拖住"(实测症状:路由冒烟`/api/kb/search`+`/api/kb`双双15s超时52/2)。修法=`lib/knowledge.js`向量按**块内容哈希**缓存(KB_EMBED_FILE v2格式`{v:2,key,byHash}`),只嵌新块;含v1→v2自动迁移+并发去重+保存时按当前块剪枝。新增`test/kb-embed-incremental.test.js`。
+- ④记忆沉淀:`state.db`持久化→**数据本不丢**,缺的只是时效(最坏30min)。新增`lib/kbflush.js`在compact/restore边界拉`kb/sync.sh --capture-only`(纯规则不调模型,免抢16G内存);sync.sh加原子mkdir单实例锁。
+- ⑥stall降级:`lib/stall.js`纯函数(`stallConfig`/`failoverPlan`)+`handleChatGateway`重试循环。**默认关**:`HERMES_STALL_SEC`未设=不生效;`HERMES_FALLBACK_MODEL`备用模型。两硬边界=仅首token前降 + 备用模型必须已驻留(16G降冷模型代价更大)。文档`docs/gateway.md`§4.6。
+- ⑥接线踩坑:轮询循环只启一次(getSessionId活闭包);换会话`stats.lastMsgId`归零;重跑标题带attempts后缀(gateway标题唯一);**必须`active.delete(旧sessionId)`**(否则永久409);每次尝试独立AbortController;stall掐流也走onDone须区分(否则轮询立刻finalize)。
 
 ## 持续项
 - hermes升级复查:技能改名复原/原生能力仍成立/num_ctx六处对齐。KB:`/api/kb/*`全需Bearer。原生`curator`需`adopt`才管我们的技能(agent-created仍=0)。
+
+## 本地模型内存画像(16GB Mac实测 2026-09-13)
+- 常驻SIZE:qwen3:8b 7.4GB / gemma4:e4b 9.5GB / qwen2.5:14b & qwen3:14b 12GB(磁盘更小,含KV cache等运行时开销)。
+- 16GB统一内存结论:8B单跑安全甜点(余量~4.6GB);14B单驻临界但实测可跑完(首token14-45s,总39-45s,不OOM);gemma4 9.5GB安全;**双≥8B同驻≈19GB>16GB→swap/OOM**,同一时刻只留一个≥8B常驻(Ollama自动驱逐最久未用)。
+- function calling适配:四模型单轮均成功生成tool_call(✅),但单轮探针不回传工具结果→无法区分多轮编码质量;OpenCode式多轮需喂回结果再测。
+
+## 跨 Agent 经验沉淀规范（2026-09-13 约定）
+完成重要工作（修 bug/新功能/性能调优/重大决策）后，主动把可复用的行为模式按以下格式追加到 .workbuddy/kb_inbox.md 并运行 `python3 kb/kb.py build` 重建索引：
+`### [zcode·行为模式] <时间戳> · <标题>` + 来源Agent / 工作目录 / 适用场景 / 标签(#标签) / 任务 / 关键行为模式（编号列表）。
+这是用户的明确要求：调用其他 Agent 完成任务后，自动沉淀经验进知识库。

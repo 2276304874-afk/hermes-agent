@@ -302,6 +302,56 @@ else
   bad "checkpoints 或 stopjudge 模块导出缺失 —— 路由接线会静默失效"
 fi
 
+# ---------- [11] 资源余量与双驻留（2026-09-13 升级规划 v0.3-#2） ----------
+echo
+echo "[11] 资源余量与双驻留"
+# 内存余量：<20% 时双驻留/大前缀推理会出现换页与槽位挤压（实测 29% 即触发模型互挤）
+FREE_PCT=$(memory_pressure 2>/dev/null | grep -oE "System-wide memory free percentage: [0-9]+" | grep -oE "[0-9]+" | head -1)
+if [ -n "${FREE_PCT}" ] && [ "${FREE_PCT}" -ge 20 ] 2>/dev/null; then
+  ok "系统可用内存 ${FREE_PCT}%（≥20% 安全线）"
+elif [ -n "${FREE_PCT}" ]; then
+  warn "系统可用内存仅 ${FREE_PCT}%（<20%）—— 双模型驻留/长上下文推理可能被挤页"
+else
+  warn "无法读取内存余量（memory_pressure 不可用）"
+fi
+# Ollama 服务模式：无头服务（com.zhaocaozheng.ollama）才带 MAX_LOADED_MODELS=2/KV q8_0 等环境配置
+# 注意：launchctl list 里"已退出但注册项还在"的行首列是 '-'（无 PID），必须要求 PID 为数字才算运行中
+if launchctl list 2>/dev/null | grep -E "^[0-9]+[[:space:]].*com\.zhaocaozheng\.ollama" > /dev/null; then
+  ok "Ollama 以无头服务运行（MAX_LOADED_MODELS=2 / KV q8_0 环境生效）"
+elif launchctl list 2>/dev/null | grep -E "^[0-9]+[[:space:]].*com\.ollama\.ollama" > /dev/null; then
+  warn "Ollama 以 GUI App 运行 —— D1 环境配置（双驻留/KV 量化）未生效，建议切换无头服务"
+else
+  warn "未检测到 Ollama 服务注册项"
+fi
+# 驻留模型数（信息项，不计分）
+RESIDENT=$(ollama ps 2>/dev/null | tail -n +2 | grep -cE ".+" || true)
+echo "  ℹ️  当前驻留模型数: ${RESIDENT}（双驻留 = 2；内存不足时 Ollama 会按需驱逐）"
+# 工具集门禁（2026-09-13 升级规划 v0.3-#1）：platform_toolsets 显式名单是 opt-in 语义——
+# 拼写错误 / 引擎升级改名都会被引擎【静默丢弃】而无任何报错，症状是工具能力悄悄消失。
+# 这里用引擎同款解析函数实测 api_server 平台解析出的工具集数与核心成员，偏离基线即报警。
+if [ -x "${HOME}/.hermes/venvs/hermes/bin/python" ]; then
+  TOOLSET_CHECK=$(HOME="${HOME}" "${HOME}/.hermes/venvs/hermes/bin/python" -c "
+import sys, yaml
+sys.path.insert(0, '${HOME}/.hermes/hermes-agent')
+config = yaml.safe_load(open('${HOME}/.hermes/config.yaml')) or {}
+from hermes_cli.tools_config import _get_platform_tools
+resolved = _get_platform_tools(config or {}, 'api_server')
+core = {'file', 'terminal', 'memory', 'web', 'skills'}
+missing = sorted(core - resolved)
+print(f'{len(resolved)}|{\",\".join(missing)}')
+" 2>/dev/null || echo "ERR|")
+  COUNT="${TOOLSET_CHECK%%|*}"; MISSING="${TOOLSET_CHECK#*|}"
+  if [ "${COUNT}" = "ERR" ]; then
+    warn "工具集解析探测失败（venv/引擎路径异常）"
+  elif [ "${COUNT}" -ge 13 ] 2>/dev/null && [ -z "${MISSING}" ]; then
+    ok "api_server 解析工具集 ${COUNT} 个 ≥ 基线 13，核心成员齐全"
+  else
+    bad "api_server 解析工具集仅 ${COUNT} 个（基线 13）${MISSING:+，核心缺失: ${MISSING}} —— platform_toolsets 名单可能有拼写错误或引擎改名后失效"
+  fi
+else
+  warn "引擎 venv 不存在，跳过工具集门禁"
+fi
+
 # ---------- 汇总 ----------
 echo
 echo "=============================================="

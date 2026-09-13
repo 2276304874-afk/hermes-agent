@@ -195,7 +195,11 @@ const CONSOLE_WHITELIST = [
     /* ---------- L5 降级分支（P1-4） ---------- */
     // /api/sessions 返回 degraded 时，会话列表区必须出现"疑似格式变更"告警且仍照常渲染。
     // 正常态永远测不到这个分支（后端只在 CLI 输出格式变更时才给标记），故用路由拦截构造响应。
+    // 双模式（2026-09-13）：degraded 是工作模式（引擎会话）行为——先切「工作」分段再断言；
+    // 对话模式的会话走独立存储（/api/chat/sessions），对该拦截天然免疫。
     console.log('L5 降级分支');
+    await page.evaluate(() => document.querySelector('.mode-opt[data-mode="work"]').click());
+    await page.waitForTimeout(700);
     await page.route('**/api/sessions', r => r.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -244,6 +248,37 @@ const CONSOLE_WHITELIST = [
         '选择器含「未归类」与「新建工作区…」', (moveProbe.opts || []).join(','));
       check(moveProbe.closed === true, '再次点击收起选择器（幂等）', String(moveProbe.closed));
     }
+
+    /* ---------- L5c 对话模式契约（2026-09-13 双模式） ---------- */
+    // 对话/工作分段开关的三个易回归点：① 工作专属控件的可见性切换；
+    // ② 会话项动作裁剪（对话模式无 move/export）；③ 模式偏好的 localStorage 持久化。
+    console.log('L5c 对话模式契约');
+    await page.evaluate(() => document.querySelector('.mode-opt[data-mode="chat"]').click());
+    await page.waitForTimeout(700);
+    const chatContract = await page.evaluate(() => {
+      const vis = id => { const el = document.getElementById(id); return el ? getComputedStyle(el).display !== 'none' : null; };
+      const item = document.querySelector('.sess-item');
+      return {
+        seg: document.querySelector('.mode-opt.active')?.dataset.mode,
+        wsModHidden: vis('wsModBtn') === false,
+        autoHidden: vis('autoBtn') === false,
+        modelHidden: vis('modelSelect') === false,
+        itemHasMove: item ? !!item.querySelector('[data-act="move"]') : null,
+      };
+    });
+    check(chatContract.seg === 'chat', '切换到对话模式生效', String(chatContract.seg));
+    check(chatContract.wsModHidden && chatContract.autoHidden && chatContract.modelHidden,
+      '对话模式隐藏工作专属控件（放行/自主/模型选择）', JSON.stringify(chatContract).slice(0, 90));
+    if (chatContract.itemHasMove !== null) {
+      check(chatContract.itemHasMove === false, '对话模式会话项无「移动到工作区」按钮', String(chatContract.itemHasMove));
+    }
+    await page.reload({ waitUntil: 'load' });
+    await page.waitForTimeout(1200);
+    const segAfterReload = await page.evaluate(() => document.querySelector('.mode-opt.active')?.dataset.mode);
+    check(segAfterReload === 'chat', '模式偏好刷新后保持（localStorage 持久化）', String(segAfterReload));
+    // 切回工作模式，让后续断言与截图处于默认工作语境
+    await page.evaluate(() => document.querySelector('.mode-opt[data-mode="work"]').click());
+    await page.waitForTimeout(600);
 
     // 重命名能力 2026-09-12 补：此前改工作区名只能「删除再新建」，而删除会连带清掉该区
     // 全部会话归属（会话就此散落回「未归类」）。这里守住入口存在 + 默认区受保护。

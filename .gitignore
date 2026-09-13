@@ -31,6 +31,8 @@ build/
 # 增量捕获/蒸馏游标：换机后重建无害
 .workbuddy/kb_capture_state.json
 .workbuddy/kb_distill_state.json
+# 其他 agent 侧捕获游标（仅 last_updated_ms，同上，可重建）
+.workbuddy/kb_zcode_state.json
 # 临时区（含 server.py.bak-* 之类的编辑器/工具备份）
 .workbuddy/tmp/
 

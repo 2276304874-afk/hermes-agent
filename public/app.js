@@ -89,7 +89,7 @@
   let renderTimer = null;     // markdown 节流渲染
   let curStats = null;        // done 事件带来的速度统计
 
-  function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function escapeHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
   function scrollDown() { messagesEl.scrollTop = messagesEl.scrollHeight; }
 
   /* ---------- Token 认证 ---------- */
@@ -97,6 +97,22 @@
   function setToken(t) { localStorage.setItem('hermes_ui_token', t); }
   function showLogin() { loginMask.classList.add('show'); tokenInput.focus(); }
   function hideLogin() { loginMask.classList.remove('show'); }
+  /* 启动屏移除（2026-09-13）：样式内联在 index.html，不依赖本文件即可显示；
+   * 本函数在启动判定完成后淡出移除。5s 兜底在 index.html 内联脚本里（防本文件加载失败）。
+   * 最短展示 700ms：本地加载太快时启动屏一闪而过，品牌画面都没看全——保证至少停留一拍。 */
+  let splashShownAt = 0;
+  function hideSplash() {
+    const sp = document.getElementById('splash');
+    if (!sp || sp.classList.contains('hide')) return;
+    const shownAt = Number(sp.dataset.shownAt || 0);
+    const wait = shownAt ? Math.max(0, 700 - (Date.now() - shownAt)) : 0;
+    setTimeout(() => {
+      const el = document.getElementById('splash');
+      if (!el) return;
+      el.classList.add('hide');
+      setTimeout(() => el.remove(), 320);
+    }, wait);
+  }
   function authHeaders(extra) {
     const h = { ...(extra || {}) };
     const t = getToken();
@@ -213,7 +229,11 @@
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
     s = s.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-    s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (m, text, url) => {
+      // 安全：url 取自已 escapeHtml 的文本，此处再剥离可中断属性的字符，杜绝 onmouseover 等注入
+      const safeUrl = String(url).replace(/["'<>]/g, '');
+      return '<a href="' + safeUrl + '" target="_blank" rel="noopener">' + text + '</a>';
+    });
     return s;
   }
 
@@ -538,7 +558,8 @@
     else { sendBtn.innerHTML = SVG_UP; sendBtn.title = '发送'; sendBtn.classList.remove('cancel'); }
   }
   function updateHint() {
-    let s = sessionId ? ('当前会话: ' + sessionId) : '新会话（发送后将建立 Hermes 会话）';
+    let s = sessionId ? ('当前会话: ' + sessionId)
+      : (uiSeg === 'chat' ? '新对话（对话模式 · 轻量模型秒回）' : '新会话（发送后将建立 Hermes 会话）');
     if (curStats) {
       s = `完成 · 首字 ${curStats.firstTokenMs || '-'}s` + (curStats.charsPerSec ? ` · ~${curStats.charsPerSec} tok/s` : '') + ` · ${curStats.elapsed}s`;
     }
@@ -729,24 +750,32 @@
   }
   const GROUP_ORDER = ['今天', '昨天', '近 7 天', '更早'];
 
-  function renderSessItem(s) {
+  function renderSessItem(s, isChat) {
+    isChat = isChat || uiSeg === 'chat';
     const el = document.createElement('div');
     el.className = 'sess-item' + (s.id === sessionId ? ' active' : '');
-    const wsTag = wsAssign[s.id] ? '<span class="ws-tag">📁 ' + escapeHtml(wsAssign[s.id]) + '</span> ' : '';
-    el.innerHTML = '<div class="t">' + escapeHtml(s.title) + '</div><div class="m">' + wsTag + escapeHtml(s.info) + '</div>'
-      + '<div class="sess-actions">'
-      + '<button type="button" data-act="move" title="移动到工作区"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l1.8 2.2h7A1.5 1.5 0 0 1 19 9.7v8.3a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 18z"/></svg></button>'
+    const wsTag = (!isChat && wsAssign[s.id]) ? '<span class="ws-tag">📁 ' + escapeHtml(wsAssign[s.id]) + '</span> ' : '';
+    // 对话模式：无工作区归属与导出（工作区/引擎导出是工作模式概念），只留重命名/删除
+    const actButtons =
+      (isChat ? '' :
+        '<button type="button" data-act="move" title="移动到工作区"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4.2l1.8 2.2h7A1.5 1.5 0 0 1 19 9.7v8.3a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 3 18z"/></svg></button>')
       + '<button type="button" data-act="rename" title="重命名"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18.2 3.3a2.1 2.1 0 0 1 3 3L13 14.5l-4 1 1-4z"/><path d="M19.5 14.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6.5a2 2 0 0 1 2-2h4.5"/></svg></button>'
-      + '<button type="button" data-act="export" title="导出 Markdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><polyline points="7.5,10 12,14.5 16.5,10"/><path d="M4 16.5V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2.5"/></svg></button>'
-      + '<button type="button" data-act="del" class="del" title="删除会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v1.5"/><path d="M6.5 6.5l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12"/><line x1="10" y1="10.5" x2="10" y2="16.5"/><line x1="14" y1="10.5" x2="14" y2="16.5"/></svg></button></div>';
-    el.querySelector('[data-act="move"]').onclick = (e) => { e.stopPropagation(); openWsPicker(el, s.id); };
+      + (isChat ? '' :
+        '<button type="button" data-act="export" title="导出 Markdown"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v11"/><polyline points="7.5,10 12,14.5 16.5,10"/><path d="M4 16.5V19a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2.5"/></svg></button>')
+      + '<button type="button" data-act="del" class="del" title="删除会话"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6.5h16"/><path d="M9.5 6.5V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v1.5"/><path d="M6.5 6.5l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12"/><line x1="10" y1="10.5" x2="10" y2="16.5"/><line x1="14" y1="10.5" x2="14" y2="16.5"/></svg></button>';
+    const meta = isChat ? ((s.msgCount || 0) + ' 条消息') : (s.info || '');
+    el.innerHTML = '<div class="t">' + escapeHtml(s.title) + '</div><div class="m">' + wsTag + escapeHtml(meta) + '</div>'
+      + '<div class="sess-actions">' + actButtons + '</div>';
+    const moveBtn = el.querySelector('[data-act="move"]');
+    const exportBtn = el.querySelector('[data-act="export"]');
+    if (moveBtn) moveBtn.onclick = (e) => { e.stopPropagation(); openWsPicker(el, s.id); };
     el.querySelector('[data-act="rename"]').onclick = (e) => { e.stopPropagation(); renameSession(s.id, s.title); };
-    el.querySelector('[data-act="export"]').onclick = (e) => { e.stopPropagation(); exportSession(s.id); };
+    if (exportBtn) exportBtn.onclick = (e) => { e.stopPropagation(); exportSession(s.id); };
     el.querySelector('[data-act="del"]').onclick = (e) => { e.stopPropagation(); deleteSession(s.id); };
     el.onclick = async () => {
       sessionId = s.id; currentRunId = null; currentRunEl = null;
       setConvTitle(s.title, true);   // 会话视图顶栏：载入历史会话时显示其标题
-      setConvMeta(wsAssign[s.id] || '');
+      setConvMeta(isChat ? '对话模式' : (wsAssign[s.id] || ''));
       mountComposer(false);          // 输入卡先归位底部，再清空消息区（防被 innerHTML='' 连带销毁）
       if (isMobile()) setSideDrawer(false);   // 手机上选中会话后收起抽屉
       messagesEl.innerHTML = '';
@@ -754,7 +783,8 @@
       note.textContent = '加载历史会话 ' + s.id + ' …';
       messagesEl.appendChild(note);
       try {
-        const resp = await apiFetch('/api/history?session=' + encodeURIComponent(s.id));
+        const ep = isChat ? '/api/chat/history?session=' : '/api/history?session=';
+        const resp = await apiFetch(ep + encodeURIComponent(s.id));
         const data = await resp.json();
         messagesEl.innerHTML = '';
         if (data.messages && data.messages.length) renderHistory(data.messages);
@@ -936,7 +966,48 @@
     sel.value = activeWs || '';
   }
 
+  /* ---------- 对话/工作 分段开关（2026-09-13，侧栏新会话按钮下方） ----------
+   * 对话=轻量模型直连（chat_ 会话独立存储，秒回）；工作=完整 Hermes 引擎（工具/文件/KB）。
+   * 两边历史记录分列（服务端两套存储），切换即换列表；进行中的视图收起新开，原会话留在原列表。
+   * ⚠️ 本块必须放在所有 let/const 状态声明之后：applySeg 初始调用会读 curStats 等变量，
+   *    放前面会触发 TDZ（2026-09-13 实锤：整段 IIFE 中断，状态栏卡死+列表报 GROUP_ORDER）。 */
+  let uiSeg = 'chat';
+  try { uiSeg = localStorage.getItem('hermes_ui_seg') === 'work' ? 'work' : 'chat'; } catch (e) {}
+  const modeSegEl = $('modeSeg');
+  function applySeg(seg, opts) {
+    opts = opts || {};
+    uiSeg = seg === 'work' ? 'work' : 'chat';
+    try { localStorage.setItem('hermes_ui_seg', uiSeg); } catch (e) { softFail('保存模式偏好', e); }
+    if (modeSegEl) for (const b of modeSegEl.querySelectorAll('.mode-opt')) b.classList.toggle('active', b.dataset.mode === uiSeg);
+    // 工作模式专属控件：对话模式收起工作区栏、模型下拉与放行/自主开关（对话模型固定、无工具概念）
+    for (const el of [$('wsBar'), $('wsModBtn'), $('autoBtn'), modelSelect]) {
+      if (el) el.style.display = uiSeg === 'work' ? '' : 'none';
+    }
+    if (!opts.noReload) {
+      loadSessions();                                // 侧栏列表立即按新模式重拉
+      if (sessionId || currentRunEl) newChat();      // 会话视图中：收起重开（内部会清空重绘）
+      else {
+        // 空态页：清掉旧 hero 再按新模式重绘（pill/磁贴/工作区选择）。
+        // ⚠️ 必须先 mountComposer(false) 再清 #messages——输入卡此刻还挂在旧空态里，
+        //    直接 innerHTML='' 会把 composer 连带销毁（见 mountComposer 头部警告）。
+        mountComposer(false);
+        messagesEl.innerHTML = '';
+        renderEmptyState();
+        refreshHeroCtx();
+      }
+    }
+    updateHint();
+  }
+  if (modeSegEl) {
+    for (const b of modeSegEl.querySelectorAll('.mode-opt')) {
+      b.onclick = () => { if (uiSeg !== b.dataset.mode) applySeg(b.dataset.mode); };
+    }
+  }
+  applySeg(uiSeg, { noReload: true });   // 进页摆好开关与控件可见性；列表由登录后的 loadSessions 按模式拉取
+
   async function loadSessions() {
+    // 对话模式：走独立轻量存储（chat_ 会话），与工作模式（引擎会话）分列
+    if (uiSeg === 'chat') return loadChatSessions();
     // 失败必须显式暴露：以前是 catch(e){} 静默吞掉，服务挂了 / 401 / 接口报错
     // 都只显示"暂无历史会话"，用户分不清是"真没有"还是"没加载出来"。
     try {
@@ -988,19 +1059,49 @@
     }
   }
 
+  /* 对话模式的会话列表：chatstore 轻量列表（无工作区分组），样式与工作列表一致 */
+  async function loadChatSessions() {
+    try {
+      const r = await apiFetch('/api/chat/sessions');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      sessListEl.innerHTML = '';
+      const q = ($('sessSearch').value || '').trim().toLowerCase();
+      const list = (data.sessions || []).filter(s =>
+        !q || String(s.title).toLowerCase().includes(q) || String(s.id).includes(q));
+      for (const s of list) sessListEl.appendChild(renderSessItem(s, true));
+      if (!list.length) {
+        const e = document.createElement('div'); e.className = 'sess-group';
+        e.textContent = q ? '无匹配会话' : '暂无历史会话'; sessListEl.appendChild(e);
+      }
+    } catch (e) {
+      sessListEl.innerHTML = '';
+      const box = document.createElement('div');
+      box.className = 'sess-group';
+      box.textContent = '会话列表加载失败' + (e && e.message ? '（' + e.message + '）' : '') + ' · 点击重试';
+      box.style.cursor = 'pointer';
+      box.style.color = 'var(--danger, #c0392b)';
+      box.title = '点击重新加载会话列表';
+      box.onclick = loadSessions;
+      sessListEl.appendChild(box);
+    }
+  }
+
   /* ---------- L4: 会话管理 ---------- */
+  // 端点按模式分流：对话模式走 /api/chat/session/*（chatstore），工作模式走引擎会话接口
+  function sessEp(action) { return (uiSeg === 'chat' ? '/api/chat/session/' : '/api/session/') + action; }
   async function renameSession(id, oldTitle) {
     const t = prompt('重命名会话：', oldTitle || '');
     if (t == null || !t.trim()) return;
     try {
-      const r = await apiFetch('/api/session/rename', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, title: t.trim().slice(0, 80) }) });
+      const r = await apiFetch(sessEp('rename'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, title: t.trim().slice(0, 80) }) });
       if (r.ok) loadSessions(); else { const d = await r.json().catch(() => ({})); alert('重命名失败: ' + (d.error || r.status)); }
     } catch (e) { alert('重命名失败: ' + e.message); }
   }
   async function deleteSession(id) {
     if (!confirm('确定删除该会话？此操作不可恢复。')) return;
     try {
-      const r = await apiFetch('/api/session/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+      const r = await apiFetch(sessEp('delete'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
       if (r.ok) { if (id === sessionId) newChat(); loadSessions(); }
       else { const d = await r.json().catch(() => ({})); alert('删除失败: ' + (d.error || r.status)); }
     } catch (e) { alert('删除失败: ' + e.message); }
@@ -1025,12 +1126,16 @@
         apiFetch('/api/status').then(r => r.json()).catch(() => null),
         apiFetch('/api/usage').then(r => r.json()).catch(() => null)
       ]);
-      // 浏览器缓存适配：服务端页面 mtime 与本页面版本戳不一致 → 弹刷新提示条
+      // 浏览览器缓存适配：服务端页面 mtime 与本页面版本戳不一致 → 弹刷新提示条
       try {
         const h = await apiFetch('/api/health').then(r => r.json()).catch(() => null);
         const stale = !!(h && h.uiVersion && window.__UI_VERSION__ && window.__UI_VERSION__ !== '__UI_VERSION__' && h.uiVersion !== window.__UI_VERSION__);
         const banner = document.getElementById('verBanner');
-        if (banner) banner.classList.toggle('show', stale);
+        // 同一版本只提示一次：编辑文件期间 mismatch 会持续存在，每 15s 都重弹等于常驻骚扰（2026-09-13）。
+        // 出现过一次后自动收起；出现更新的版本再提示。
+        if (!stale) { verBannerShownFor = null; if (banner) banner.classList.remove('show'); }
+        else if (verBannerShownFor !== h.uiVersion) { verBannerShownFor = h.uiVersion; if (banner) banner.classList.add('show'); }
+        else if (banner) banner.classList.remove('show');
       } catch (e) { softFail('界面更新提示', e); }   // 提示条拿不到不影响功能
       const dot = $('ollamaDot'), txt = $('ollamaTxt');
       if (s && s.ollama && s.ollama.up) {
@@ -1588,6 +1693,11 @@
     if (!f) return;
     const ext = (f.name.split('.').pop() || '').toLowerCase();
     const isText = INLINE_TEXT_EXTS.includes(ext) && f.size <= 200 * 1024;
+    // 对话模式守卫：模型无工具，读不了落盘路径——只收小文本内联；其余引导去工作模式
+    if (uiSeg === 'chat' && !INLINE_TEXT_EXTS.includes(ext)) {
+      alert('对话模式仅支持文本类文件（内容随消息直接发送）；PDF/Word/二进制等请切换到「工作」模式上传。');
+      return;
+    }
     if (isText) {
       const fr = new FileReader();
       fr.onload = () => {
@@ -1597,7 +1707,11 @@
           renderFilePreview();
           return;
         }
-        // 文本太大，内联会撞 PROMPT_LIMIT → 转落盘路径模式
+        // 文本太大，内联会撞 PROMPT_LIMIT → 转落盘路径模式（依赖引擎工具；对话模式无工具，引导切换）
+        if (uiSeg === 'chat') {
+          alert('该文本超过对话模式可直传的长度（' + INLINE_MAX_CHARS + ' 字符）。请切换到「工作」模式上传，由智能体自行读取。');
+          return;
+        }
         uploadFile(f);
       };
       fr.onerror = () => { alert('无法读取该文件'); };
@@ -1627,15 +1741,45 @@
     }
     renderFilePreview();
   }
+  /* 文件类型 → 图标方块（字符 + 配色），参考 Word/PDF 徽标风格 */
+  const FILE_ICON_MAP = {
+    doc: ['W', '#4f83f2'], docx: ['W', '#4f83f2'],
+    pdf: ['PDF', '#e5534b'],
+    xls: ['XLS', '#3fb950'], xlsx: ['XLS', '#3fb950'], csv: ['CSV', '#3fb950'],
+    ppt: ['PPT', '#f0883e'], pptx: ['PPT', '#f0883e'],
+    md: ['MD', '#8b7cf7'], markdown: ['MD', '#8b7cf7'], txt: ['TXT', '#a2a8b3'], log: ['LOG', '#a2a8b3'],
+    zip: ['ZIP', '#d29922'], rar: ['RAR', '#d29922'], '7z': ['7Z', '#d29922'], tar: ['TAR', '#d29922'], gz: ['GZ', '#d29922'],
+    js: ['JS', '#8b7cf7'], ts: ['TS', '#5f8bff'], py: ['PY', '#3fb950'],
+    json: ['JSON', '#d29922'], yaml: ['YML', '#d29922'], yml: ['YML', '#d29922'],
+    html: ['HTML', '#f0883e'], css: ['CSS', '#5f8bff'], sql: ['SQL', '#5f8bff'],
+    sh: ['SH', '#3fb950'], mp3: ['MP3', '#8b7cf7'], wav: ['WAV', '#8b7cf7'],
+  };
+  function fileIconMeta(name) {
+    const ext = (String(name).split('.').pop() || '').toLowerCase();
+    const hit = FILE_ICON_MAP[ext];
+    if (hit) return { glyph: hit[0], color: hit[1], label: ext.toUpperCase() };
+    const up = (ext || 'file').slice(0, 4).toUpperCase();
+    return { glyph: up, color: '#6d7480', label: ext.toUpperCase() || 'FILE' };
+  }
   function renderFilePreview() {
     if (!pendingFile) { filePreviewEl.classList.remove('show'); filePreviewEl.innerHTML = ''; return; }
     filePreviewEl.classList.add('show');
-    const note = pendingFile.kind === 'inline' ? ' · 内容将随消息一起发送'
-      : pendingFile.kind === 'path' ? ' · 已存盘，发送时把路径交给 Hermes 读取'
-      : pendingFile.kind === 'projdir' ? ' · 项目已落盘，发送时把仓库地图流程交给 Hermes'
-      : ' · 正在上传…';
-    filePreviewEl.innerHTML = '<span class="tag">📄 ' + escapeHtml(pendingFile.name) + note
-      + '<button type="button" class="rm" title="移除文件" style="position:static;display:inline-block;margin-left:8px;vertical-align:middle">✕</button></span>';
+    const note = pendingFile.kind === 'inline' ? '内容将随消息一起发送'
+      : pendingFile.kind === 'path' ? '已存盘，发送时路径交给 Hermes 读取'
+      : pendingFile.kind === 'projdir' ? `项目已落盘 · ${pendingFile.count || '?'} 个文件`
+      : '正在上传…';
+    const isProj = pendingFile.kind === 'projdir';
+    const meta = fileIconMeta(pendingFile.name || '');
+    const glyph = isProj ? '🗂' : meta.glyph;
+    const iconBg = isProj ? 'linear-gradient(135deg, var(--accent), var(--accent-2))' : meta.color;
+    const label = isProj ? 'PROJECT' : meta.label;
+    filePreviewEl.innerHTML = '<div class="file-chip">'
+      + '<div class="fc-icon" style="background:' + iconBg + (isProj ? ';font-size:20px' : (meta.glyph.length > 3 ? ';font-size:9.5px' : ';font-size:14px')) + '">'
+      + escapeHtml(glyph) + '</div>'
+      + '<div class="fc-body"><div class="fc-name">' + escapeHtml(pendingFile.name) + '</div>'
+      + '<div class="fc-meta"><b>' + escapeHtml(label) + '</b> · ' + escapeHtml(note) + '</div></div>'
+      + '<button type="button" class="rm" title="移除文件">✕</button>'
+      + '</div>';
     filePreviewEl.querySelector('.rm').onclick = () => { pendingFile = null; renderFilePreview(); };
   }
   function filePromptSuffix(pf) {
@@ -1787,11 +1931,18 @@
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: finalPrompt, sessionId, model: modelSelect.value,
+          mode: uiSeg,                                          // 对话/工作 分段开关：服务端按 mode 分流（chat=直连轻量模型）
           allowDangerous: !!allowDangerous || wsModOn || autoOn,  // 卡内开关与审批重跑共用一条放行链路；自主模式自动携带黄区放行
           autonomous: autoOn,                                    // 自主执行：服务端注入三色权限/检查点/摘要前导（lib/autonomy.js）
           workspace: (!sessionId && activeWs) ? activeWs : '',  // 仅新会话首轮传工作区，服务端 assignIfNew 只在无归属时写入
         })
       });
+      // 非 2xx（如 409 会话忙碌 / 400 空 prompt / 500）走的是 JSON 错误体，不是 SSE 流。
+      // 不拦就会把 JSON 当流读 → 无帧 → busy 卡死。这里显式转成异常交给 catch 统一复位。
+      if (!resp.ok) {
+        const d = await resp.json().catch(() => ({}));
+        throw new Error(d.message || d.error || ('HTTP ' + resp.status));
+      }
       const reader = resp.body.getReader(); const decoder = new TextDecoder();
       let buf = '';
       while (true) {
@@ -1816,15 +1967,22 @@
     '列出你能使用的技能，挑 3 个最实用的介绍给我',
     '写一个 Python 脚本，统计 ~/.hermes/skills 下技能的数量',
   ];
+  // 对话模式的空态磁贴：纯闲聊向（无工具语义），与工作模式分开
+  const CHIP_PROMPTS_CHAT = [
+    '给我讲个冷笑话',
+    '帮我规划一个周末两日游行程',
+    '用大白话解释一下什么是向量数据库',
+    '帮我想一句给朋友的生日祝福',
+  ];
   function renderEmptyState() {
     const es = document.createElement('div'); es.className = 'empty-state';
     es.innerHTML = '<div class="hero-row"><div class="hero-mark">' + HERO_MARK + '</div>'
-      + '<h2>赫尔墨斯特工</h2><span class="hero-pill">本地优先</span></div>'
-      // dsh 同位：标题下方一行上下文 chip（工作区选择；模式/模型在输入卡内）
-      + '<div class="hero-ctx"><select id="heroWs" title="新会话将归入所选工作区"></select></div>'
+      + '<h2>赫尔墨斯特工</h2><span class="hero-pill">' + (uiSeg === 'chat' ? '对话模式 · 秒回' : '本地优先') + '</span></div>'
+      // dsh 同位：标题下方一行上下文 chip（工作区选择；模式/模型在输入卡内）。对话模式无工作区概念，省略
+      + (uiSeg === 'work' ? '<div class="hero-ctx"><select id="heroWs" title="新会话将归入所选工作区"></select></div>' : '')
       + '<div class="chip-grid"></div>';
     const grid = es.querySelector('.chip-grid');
-    for (const q of CHIP_PROMPTS) {
+    for (const q of (uiSeg === 'chat' ? CHIP_PROMPTS_CHAT : CHIP_PROMPTS)) {
       const c = document.createElement('button'); c.className = 'chip'; c.type = 'button'; c.textContent = q;
       c.onclick = () => { inputEl.value = q; inputEl.style.height = 'auto'; send(); };
       grid.appendChild(c);
@@ -2184,9 +2342,10 @@
   };
 
   updateHint();
-  // 有 token 直接加载，否则弹登录
+  // 有 token 直接加载，否则弹登录；两条路径就绪后都移除启动屏（index.html 另有 5s 兜底）
   if (getToken()) { loadSessions(); loadWorkspaces(); loadModels(); refreshStatus(); renderEmptyState(); }
   else showLogin();
+  hideSplash();
 
   // 会话列表自愈：以前只在加载时取一次，任何一次失败（服务没就绪/重启中/网络抖动）
   // 都得手动刷新才能恢复。改为：
@@ -2200,8 +2359,20 @@
     sessLoading = true;
     Promise.resolve(loadSessions()).finally(() => { sessLoading = false; });
   };
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) loadSessionsOnce(); });
-  window.addEventListener('focus', loadSessionsOnce);
-  window.addEventListener('online', loadSessionsOnce);
-  setInterval(() => { if (!document.hidden) loadSessionsOnce(); }, 60000);
+  /* 状态与模型列表唤醒刷新（2026-09-13）：模型下拉只在启动时加载一次，开着的旧标签页
+   * 会一直显示过期模型（甚至已删除的），状态栏也停在旧数据——挂到同一组唤醒事件上，
+   * 切回页面/聚焦/网络恢复时与 会话列表 一起刷新（各自防重入）。 */
+  let stLoading = false;
+  const refreshStatusOnce = () => {
+    if (stLoading || !getToken()) return;
+    stLoading = true;
+    Promise.resolve(loadModels()).catch(() => {}).finally(() => { stLoading = false; });
+    Promise.resolve(refreshStatus()).catch(() => {});
+  };
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) { loadSessionsOnce(); refreshStatusOnce(); }
+  });
+  window.addEventListener('focus', () => { loadSessionsOnce(); refreshStatusOnce(); });
+  window.addEventListener('online', () => { loadSessionsOnce(); refreshStatusOnce(); });
+  setInterval(() => { if (!document.hidden) { loadSessionsOnce(); refreshStatusOnce(); } }, 60000);
 })();

@@ -168,12 +168,18 @@ test('readBody：正常收完返回原文', async () => {
   assert.strictEqual(await p, '{"a":1}');
 });
 
-test('readBody：超出上限 → 拒绝，且错误信息准确指向超限', async () => {
+test('readBody：超出上限 → 拒绝带 413 标记，请求暂停而非销毁（2026-09-13 契约）', async () => {
   const req = mockReq();
   const p = readBody(req, 8);
   req.emit('data', 'x'.repeat(20));
-  await assert.rejects(p, /body too large/);
-  assert.strictEqual(req.destroyed, true, '超限应销毁请求，停止继续收数据');
+  await assert.rejects(p, (e) => {
+    assert.match(e.message, /body too large/);
+    assert.strictEqual(e.statusCode, 413, '需带 413 标记，供 server.js 兜底分支识别并回 413');
+    return true;
+  });
+  // 新契约：不再当场 destroy（那会让客户端只见 ConnectionReset），改为停止读取，
+  // 由 server.js 的兜底分支回 413、响应 flush 完再断 socket。
+  assert.strictEqual(req.destroyed, false, '不应销毁请求——413 响应还要从这条连接写出去');
 });
 
 test('readBody：客户端中途断开 → 拒绝（而不是永久挂起）', async () => {

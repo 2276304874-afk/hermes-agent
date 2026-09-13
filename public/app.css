@@ -348,6 +348,17 @@
   .img-preview .rm { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; border-radius: 50%; border: none; background: rgba(0,0,0,.65); color: #fff; font-size: 12px; line-height: 1; cursor: pointer; }
   .img-preview .tag { align-self: center; margin-left: 10px; font-size: 12px; color: var(--text-dim); }
   .img-preview .busy { align-self: center; margin-left: 10px; font-size: 12px; color: var(--cloud); }
+  /* ---------- 文件附件卡片（2026-09-13 重做：类型图标 + 文件名 + 类型标签） ---------- */
+  .file-preview { display: none; max-width: 840px; margin: 6px auto 0; }
+  .file-preview.show { display: block; }
+  .file-chip { display: flex; align-items: center; gap: 12px; width: fit-content; max-width: 100%; padding: 10px 14px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 14px; box-shadow: var(--elev-float); }
+  .file-chip .fc-icon { width: 42px; height: 42px; border-radius: 11px; display: flex; align-items: center; justify-content: center; font-weight: 700; color: #fff; flex-shrink: 0; letter-spacing: .3px; font-family: -apple-system, "Segoe UI", sans-serif; }
+  .file-chip .fc-body { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .file-chip .fc-name { font-size: 13.5px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-chip .fc-meta { font-size: 11.5px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-chip .fc-meta b { font-weight: 600; letter-spacing: .4px; }
+  .file-chip .rm { margin-left: 4px; background: none; border: none; color: var(--text-dim); font-size: 13px; cursor: pointer; padding: 5px 7px; border-radius: 8px; flex-shrink: 0; transition: color .15s, background .15s; }
+  .file-chip .rm:hover { color: var(--danger); background: var(--hover-tint); }
   /* 细滚动条：8px、低对比 thumb、透明轨道 */
   ::-webkit-scrollbar { width: 8px; height: 8px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -408,6 +419,12 @@
   .side-new { display: flex; align-items: center; justify-content: center; gap: 7px; margin: 12px 10px 4px; padding: 10px 12px; background: var(--bg-elev); color: var(--text); border: 1px solid var(--border); border-radius: 12px; font-size: 13.5px; font-weight: 500; cursor: pointer; flex-shrink: 0; transition: background .15s, border-color .15s; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
   .side-new svg { width: 16px; height: 16px; color: var(--text); }
   .side-new:hover { background: color-mix(in srgb, var(--accent) 6%, var(--bg-elev)); border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
+  /* 对话/工作 分段开关（新会话按钮下方）：胶囊双段，选中段浮起 */
+  .mode-seg { display: flex; margin: 8px 10px 2px; padding: 3px; background: var(--bg-soft); border: 1px solid var(--border); border-radius: 999px; flex-shrink: 0; }
+  .mode-opt { flex: 1; padding: 6px 0; background: none; border: none; border-radius: 999px; color: var(--text-dim); font-size: 12.5px; font-weight: 500; cursor: pointer; transition: background .15s, color .15s; }
+  .mode-opt:hover { color: var(--text); }
+  .mode-opt.active { background: var(--bg-elev); color: var(--text); box-shadow: var(--elev-float); font-weight: 600; }
+  html[data-theme="light"] .mode-opt.active { background: #fff; }
   /* 侧栏底部设置入口（文本按钮，不抢状态栏视觉） */
   .side-link { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; color: var(--text-dim); font-size: 11.5px; cursor: pointer; padding: 2px 0; transition: color .15s; }
   .side-link svg { width: 13px; height: 13px; }
@@ -422,8 +439,9 @@
   .conv-btn:hover { color: var(--text); border-color: var(--border); }
   .conv-btn:disabled { opacity: .5; cursor: not-allowed; }
   /* Hero 空态模式：输入卡居中变窄（浮层投影 + 光晕已由 .empty-state::before 提供） */
-  .composer.hero-mode { padding: 0 20px; }
-  .composer.hero-mode .box { max-width: 760px; border-radius: 24px; padding: 16px 18px; }
+  .composer.hero-mode { padding: 0 20px; width: 100%; }   /* width:100% —— 空态是 flex 居中容器，不撑满会收缩成内容宽 */
+  /* 与对话态输入卡同宽（840px）：首条消息发出后卡片宽度不再跳变 */
+  .composer.hero-mode .box { max-width: 840px; border-radius: 24px; padding: 16px 18px; }
   .composer.hero-mode .hint { display: none; }
   /* ---------- 工作区模块 ---------- */
   /* 侧栏工作区 chips：幽灵 pill，选中 = 主文字反色（选中态不染色） */
@@ -490,3 +508,7 @@
   .cp-note { margin-top: 10px; font-size: 12px; line-height: 1.65; border-radius: 10px; padding: 9px 11px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
   .cp-note.ok { border-color: color-mix(in srgb, var(--accent) 40%, transparent); color: var(--text); }
   .cp-note.err { border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger-soft); }
+
+  /* 加载完整性哨兵（勿删、勿移出文件尾部）：index.html 的 FOUC 守卫靠检查本规则
+     是否存在来判断 app.css 是否被截断——任何位置的截断都会丢掉文件末尾的哨兵。 */
+  .app-css-complete { --app-css-sentinel: 1; }
